@@ -44,7 +44,12 @@ export function buildManifest(browser: Browser, version: string): Record<string,
   if (browser === "firefox") {
     manifest.background = { scripts: ["background.js"], type: "module" };
     manifest.browser_specific_settings = {
-      gecko: { id: "extension@gamelist.sojusan.pl", strict_min_version: "142.0" },
+      gecko: {
+        id: "extension@gamelist.sojusan.pl",
+        strict_min_version: "142.0",
+        // Required by AMO. The extension sends nothing to the developer or third parties (see docs/privacy-policy.md).
+        data_collection_permissions: { required: ["none"] },
+      },
     };
   } else {
     manifest.background = { service_worker: "background.js", type: "module" };

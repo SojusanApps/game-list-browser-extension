@@ -15,6 +15,13 @@ describe("buildManifest", () => {
     expect(manifest.browser_specific_settings).toBeDefined();
   });
 
+  it("declares that the firefox build collects no data, as AMO requires", () => {
+    const manifest = buildManifest("firefox", "1.0.0");
+    expect(manifest.browser_specific_settings).toMatchObject({
+      gecko: { data_collection_permissions: { required: ["none"] } },
+    });
+  });
+
   it("runs the content script only on the frontend origins", () => {
     const manifest = buildManifest("chromium", "1.0.0");
     expect(manifest.content_scripts).toEqual([
