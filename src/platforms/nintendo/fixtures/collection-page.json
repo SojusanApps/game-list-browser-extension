@@ -1,0 +1,15 @@
+{
+  "data": {
+    "account": {
+      "vgc": {
+        "vgcViews": {
+          "offsetInfo": { "total": 2, "offset": 0 },
+          "views": [
+            { "id": "view-1", "applicationName": "The Legend of Zelda: Tears of the Kingdom" },
+            { "id": "view-2", "applicationName": "Hades" }
+          ]
+        }
+      }
+    }
+  }
+}

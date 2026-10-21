@@ -1,0 +1,16 @@
+{
+  "data": {
+    "account": {
+      "wishlist": {
+        "wishlistItems": {
+          "offsetInfo": { "total": 3, "offset": 0 },
+          "items": [
+            { "nsUid": "70010000000001", "itemV2": { "__typename": "ApplicationItem", "name": "Hades" } },
+            { "nsUid": "70010000000002", "itemV2": { "__typename": "BundleItem", "name": "  Celeste Bundle  " } },
+            { "nsUid": "70010000000003", "itemV2": null }
+          ]
+        }
+      }
+    }
+  }
+}
