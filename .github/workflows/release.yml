@@ -18,8 +18,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    outputs:
-      version: ${{ steps.version.outputs.version }}
 
     steps:
       - name: Checkout
@@ -66,26 +64,12 @@ jobs:
       - name: Build and package
         run: pnpm package
 
-      - name: Upload packages
+      # Chromium and Firefox builds, plus the source zip AMO reviewers use to rebuild the Firefox package.
+      - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: extension-packages-${{ steps.version.outputs.version }}
-          path: release/game-list-extension-chromium-*.zip
-          if-no-files-found: error
-
-      - name: Upload Firefox package
-        uses: actions/upload-artifact@v4
-        with:
-          name: extension-firefox-${{ steps.version.outputs.version }}
-          path: release/game-list-extension-firefox-*.zip
-          if-no-files-found: error
-
-      # AMO requires the source of bundled builds, so reviewers can rebuild it.
-      - name: Upload source
-        uses: actions/upload-artifact@v4
-        with:
-          name: extension-source-${{ steps.version.outputs.version }}
-          path: release/game-list-extension-source-*.zip
+          path: release/*.zip
           if-no-files-found: error
 
       - name: Attach packages to release
@@ -95,64 +79,3 @@ jobs:
           tag_name: ${{ github.event.release.tag_name }}
           files: release/*.zip
           fail_on_unmatched_files: true
-
-  publish-chrome:
-    name: Publish to Chrome Web Store
-    needs: build
-    if: github.event_name == 'release' && !github.event.release.prerelease
-    runs-on: ubuntu-latest
-    environment: extension-stores
-
-    steps:
-      - name: Download package
-        uses: actions/download-artifact@v4
-        with:
-          name: extension-packages-${{ needs.build.outputs.version }}
-          path: artifacts
-
-      - name: Upload and publish
-        uses: mnao305/chrome-extension-upload@f549d5d654694a7722d6abfa64c97409ad5e64c1 # v7.0.0
-        with:
-          file-path: artifacts/game-list-extension-chromium-${{ needs.build.outputs.version }}.zip
-          extension-id: ${{ vars.CHROME_EXTENSION_ID }}
-          publisher-id: ${{ vars.CHROME_PUBLISHER_ID }}
-          client-id: ${{ secrets.CHROME_CLIENT_ID }}
-          client-secret: ${{ secrets.CHROME_CLIENT_SECRET }}
-          refresh-token: ${{ secrets.CHROME_REFRESH_TOKEN }}
-
-  publish-firefox:
-    name: Publish to Firefox Add-ons
-    needs: build
-    if: github.event_name == 'release' && !github.event.release.prerelease
-    runs-on: ubuntu-latest
-    environment: extension-stores
-
-    steps:
-      - name: Download package
-        uses: actions/download-artifact@v4
-        with:
-          name: extension-firefox-${{ needs.build.outputs.version }}
-          path: artifacts
-
-      - name: Download source code
-        uses: actions/download-artifact@v4
-        with:
-          name: extension-source-${{ needs.build.outputs.version }}
-          path: source
-
-      - name: Upload and publish
-        uses: wdzeng/firefox-addon@3184ee491b500e080885e046051366a4228c6e5d # v1.2.1
-        with:
-          addon-guid: extension@gamelist.sojusan.pl
-          xpi-path: artifacts/game-list-extension-firefox-${{ needs.build.outputs.version }}.zip
-          source-file-path: source/game-list-extension-source-${{ needs.build.outputs.version }}.zip
-          jwt-issuer: ${{ secrets.AMO_JWT_ISSUER }}
-          jwt-secret: ${{ secrets.AMO_JWT_SECRET }}
-          approval-notes: |
-            The extension is bundled with Vite (not minified). To reproduce the submitted package from the attached source:
-
-            1. Install Node.js 22 and pnpm (the pnpm version is pinned in `package.json`).
-            2. In the source directory run: `pnpm install --frozen-lockfile && pnpm build:firefox`
-            3. The built extension is in `dist/firefox/` (the submitted zip is the contents of that directory).
-
-            Changes are described in release notes on GitHub: https://github.com/SojusanApps/game-list-browser-extension/releases/tag/v${{ needs.build.outputs.version }}
