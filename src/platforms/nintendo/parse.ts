@@ -151,12 +151,12 @@ function total(offsetInfo: unknown): number | null {
 
 /**
  * Title of a wishlist entry. The persisted query returns `itemV2` (Application/Dlc/Bundle item) whose
- * display name is `name`; fall back to a few neighbouring keys in case the frontend renames it.
+ * display name is `formalName`; fall back to a few neighbouring keys in case the frontend renames it.
  */
 export function wishlistItemTitle(item: unknown): string {
   const entry = (item ?? {}) as Record<string, unknown>;
   const itemV2 = (entry.itemV2 ?? {}) as Record<string, unknown>;
-  return trimmed(itemV2.name) || trimmed(itemV2.title) || trimmed(entry.name) || trimmed(entry.title);
+  return trimmed(itemV2.formalName) || trimmed(itemV2.name) || trimmed(itemV2.title) || trimmed(entry.name) || trimmed(entry.title);
 }
 
 export function parseWishlistPage(payload: GraphqlPayload): TitlePage {
