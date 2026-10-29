@@ -49,43 +49,75 @@ export function parseLibraryPage(payload: unknown): LibraryPage {
   return { records, nextCursor: nonEmptyString(asObject(object?.responseMetadata)?.nextCursor) };
 }
 
-/** Namespace Epic uses for Unreal Engine Marketplace content (assets, plugins, project templates). */
-const UNREAL_ASSET_NAMESPACE = "ue";
-/** Catalog category paths that mark Unreal Engine content rather than games. */
-const NON_GAME_CATEGORY_PREFIXES = ["assets", "plugins", "engine"];
-
-/** Drops Unreal Engine Marketplace records so they are neither looked up nor imported. */
-export function excludeUnrealAssets(records: readonly LibraryRecord[]): LibraryRecord[] {
-  return records.filter(record => record.namespace !== UNREAL_ASSET_NAMESPACE);
+export interface Offer {
+  id: string;
+  title: string;
+  offerType: string | null;
 }
 
-function isNonGameItem(item: Record<string, unknown> | null): boolean {
-  const categories = Array.isArray(item?.categories) ? item.categories : [];
-  return categories.some(category => {
-    const path = (nonEmptyString(asObject(category)?.path) ?? "").toLowerCase();
-    return NON_GAME_CATEGORY_PREFIXES.some(prefix => path === prefix || path.startsWith(`${prefix}/`));
-  });
+export interface OffersPage {
+  offers: Offer[];
+  /** Number of offers the namespace has in total, across pages. */
+  total: number;
 }
 
-/** Groups catalog item ids by namespace, since the catalog bulk endpoint is namespaced. */
-export function groupByNamespace(records: readonly LibraryRecord[]): Map<string, string[]> {
+function parseOffer(value: unknown): Offer | null {
+  const id = nonEmptyString(asObject(value)?.id);
+  const title = nonEmptyString(asObject(value)?.title);
+  return id && title ? { id, title, offerType: nonEmptyString(asObject(value)?.offerType) } : null;
+}
+
+/** One page of `catalog/api/shared/namespace/{ns}/offers`. An offer's `id` is the `offerId`. */
+export function parseOffersPage(payload: unknown): OffersPage {
+  const object = asObject(payload);
+  const offers = (Array.isArray(object?.elements) ? object.elements : [])
+    .map(parseOffer)
+    .filter(offer => offer !== null);
+  const total = asObject(object?.paging)?.total;
+  return { offers, total: typeof total === "number" ? total : offers.length };
+}
+
+/** Offers from `catalog/api/shared/namespace/{ns}/bulk/offers`, a map of offerId to offer. */
+export function parseBulkOffers(payload: unknown): Offer[] {
+  return Object.values(asObject(payload) ?? {})
+    .map(parseOffer)
+    .filter(offer => offer !== null);
+}
+
+const BASE_GAME_OFFER_TYPE = "BASE_GAME";
+
+/** Only base games are importable; editions, add-ons and dev-audience placeholders are other offer types. */
+export function isBaseGame(offer: Offer): boolean {
+  return offer.offerType === BASE_GAME_OFFER_TYPE;
+}
+
+/**
+ * The offer of the game a namespace holds. Library records and offers share no item id, so the namespace is the only
+ * join; a namespace with no base game or with several is ambiguous and yields null rather than a guess.
+ */
+export function namespaceBaseGame(offers: readonly Offer[]): Offer | null {
+  const baseGames = offers.filter(isBaseGame);
+  return baseGames.length === 1 ? baseGames[0]! : null;
+}
+
+/** Groups wishlisted offer ids by namespace, since the catalog bulk endpoint is namespaced. */
+export function groupByNamespace(items: readonly WishlistItem[]): Map<string, string[]> {
   const groups = new Map<string, Set<string>>();
-  for (const { namespace, catalogItemId } of records) {
+  for (const { namespace, offerId } of items) {
     if (!groups.has(namespace)) groups.set(namespace, new Set());
-    groups.get(namespace)!.add(catalogItemId);
+    groups.get(namespace)!.add(offerId);
   }
   return new Map([...groups].map(([namespace, ids]) => [namespace, [...ids]]));
 }
 
-/** Titles from `catalog/api/shared/namespace/{ns}/bulk/items`, a map of catalogItemId to item. */
-export function parseCatalogTitles(payload: unknown): string[] {
-  const titles: string[] = [];
-  for (const item of Object.values(asObject(payload) ?? {})) {
-    if (isNonGameItem(asObject(item))) continue;
-    const title = nonEmptyString(asObject(item)?.title);
-    if (title) titles.push(title);
-  }
-  return titles;
+/** Namespace Epic uses for Unreal Engine Marketplace content: thousands of offers, none of them a game. */
+const UNREAL_ASSET_NAMESPACE = "ue";
+
+/** Library namespaces in first-seen order; one namespace is one game, however many items it has. */
+export function libraryNamespaces(records: readonly LibraryRecord[]): string[] {
+  const namespaces = new Set(records.map(record => record.namespace));
+  namespaces.delete(UNREAL_ASSET_NAMESPACE);
+  return [...namespaces];
 }
 
 /** True when the store GraphQL answer says the store session is missing. */
@@ -99,13 +131,26 @@ export function isWishlistNotLoggedIn(payload: unknown): boolean {
   );
 }
 
-/** Titles from the `getWishlist` GraphQL answer (`data.Wishlist.wishlistItems.elements[].offer.title`). */
-export function parseWishlistTitles(payload: unknown): string[] {
+export interface WishlistItem {
+  offerId: string;
+  namespace: string;
+}
+
+export interface WishlistItems {
+  items: WishlistItem[];
+  /** Number of wishlist elements in the answer, including ones skipped for lacking an offer id or namespace. */
+  elements: number;
+}
+
+/** Wishlisted offers from the `getWishlist` GraphQL answer (`data.Wishlist.wishlistItems.elements[]`); no titles. */
+export function parseWishlistItems(payload: unknown): WishlistItems {
   const wishlistItems = asObject(asObject(asObject(asObject(payload)?.data)?.Wishlist)?.wishlistItems);
-  const titles: string[] = [];
-  for (const element of Array.isArray(wishlistItems?.elements) ? wishlistItems.elements : []) {
-    const title = nonEmptyString(asObject(asObject(element)?.offer)?.title) ?? nonEmptyString(asObject(element)?.title);
-    if (title) titles.push(title);
+  const elements = Array.isArray(wishlistItems?.elements) ? wishlistItems.elements : [];
+  const items: WishlistItem[] = [];
+  for (const element of elements) {
+    const offerId = nonEmptyString(asObject(element)?.offerId);
+    const namespace = nonEmptyString(asObject(element)?.namespace);
+    if (offerId && namespace) items.push({ offerId, namespace });
   }
-  return titles;
+  return { items, elements: elements.length };
 }

@@ -5,8 +5,8 @@
         "vgcViews": {
           "offsetInfo": { "total": 2, "offset": 0 },
           "views": [
-            { "id": "view-1", "applicationName": "The Legend of Zelda: Tears of the Kingdom" },
-            { "id": "view-2", "applicationName": "Hades" }
+            { "id": "view-1", "nsUid": 70010000063714, "applicationName": "The Legend of Zelda: Tears of the Kingdom" },
+            { "id": "view-2", "nsUid": "70010000000001", "applicationName": "Hades" }
           ]
         }
       }

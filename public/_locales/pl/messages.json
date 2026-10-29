@@ -1,0 +1,10 @@
+{
+  "extName": {
+    "message": "SojusanApps - Browser Extension",
+    "description": "Nazwa rozszerzenia, widoczna w sklepie i na pasku narzędzi."
+  },
+  "extDescription": {
+    "message": "Uzupełnia stronę importu tytułów GameList grami z biblioteki i listy życzeń na Steam, Epic, GOG, PlayStation i Nintendo.",
+    "description": "Krótki opis w sklepie. Chrome limituje go do 132 znaków."
+  }
+}

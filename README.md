@@ -8,17 +8,17 @@ A browser extension for [Sojusan GameList](https://gamelist.sojusan.pl). It fill
 - PlayStation
 - Nintendo
 
-You stay logged in to each store in your browser as usual. On the Title Import page you press a store's button, the extension reads your library and wishlist from that store, and the titles appear in the text box. You then match them to the GameList catalogue as with any title import.
+You stay logged in to each store in your browser as usual. On the Title Import page you press a store's button, the extension reads your library and wishlist from that store, and the games appear in the text box, and those already known to GameList by their store id are imported without review. You then match them to the GameList catalogue as with any title import.
 
 ## How it works
 
 ```txt
 GameList page  ──postMessage──▶  content script  ──▶  background script  ──fetch (your session)──▶  store
-GameList page  ◀──postMessage──  content script  ◀──  background script  ◀──────── titles ──────────
+GameList page  ◀──postMessage──  content script  ◀──  background script  ◀──────── entries ─────────
 ```
 
-- The extension **never talks to the GameList backend** and holds no GameList credentials. It only returns titles to the page, and the page does the rest. See [ADR-0001](docs/adr/0001-extension-holds-no-backend-credentials.md).
-- Reading a library is **always user-triggered**, one store per click. Owned and wishlisted games are merged and de-duplicated; Epic's Unreal Engine marketplace assets are excluded.
+- The extension **never talks to the GameList backend** and holds no GameList credentials. It only returns library entries (title, store id, wishlisted) to the page, and the page does the rest. See [ADR-0001](docs/adr/0001-extension-holds-no-backend-credentials.md).
+- Reading a library is **always user-triggered**, one store per click. Owned and wishlisted games are merged and de-duplicated; Epic games are identified by their base-game offer, so add-ons and Unreal Engine marketplace assets are excluded.
 - The message contract with the frontend is in [docs/frontend-contract.md](docs/frontend-contract.md), and the domain vocabulary is in [CONTEXT.md](CONTEXT.md).
 - It works on `https://gamelist.sojusan.pl` and `http://localhost:5173` (for development) only.
 
@@ -62,7 +62,7 @@ To inspect the background script, use **service worker → Inspect** on the exte
 | `src/content.ts`         | Content script injected on the GameList frontend; relays messages      |
 | `src/bridge.ts`          | The page ↔ content script message handling                             |
 | `src/background.ts`      | Receives sync requests and runs the platform adapters                  |
-| `src/sync.ts`            | Runs one platform sync and de-duplicates the titles                    |
+| `src/sync.ts`            | Runs one platform sync and de-duplicates the entries by store id       |
 | `src/platforms/<store>/` | One adapter per store (`fetchTitles()`)                                |
 | `src/popup/`             | The toolbar popup (Preact), with an EN/PL switch                       |
 | `scripts/build.mjs`      | Builds popup, background and content script for each browser           |
@@ -72,7 +72,7 @@ To inspect the background script, use **service worker → Inspect** on the exte
 ### Adding a store
 
 1. Add the platform name to `PLATFORMS` in `src/contract.ts` and its host to `PLATFORM_HOST_PERMISSIONS` in `src/manifest.ts`.
-1. Create `src/platforms/<store>/` with an adapter that returns titles and throws `NotLoggedInError` when the user has no session, with parsing tested against fixtures.
+1. Create `src/platforms/<store>/` with an adapter that returns entries and throws `NotLoggedInError` when the user has no session, with parsing tested against fixtures.
 1. Register it in `src/platforms/index.ts`.
 1. Add the button in the frontend (`PlatformSyncButtons.tsx` and the extension `contract.ts` there).
 

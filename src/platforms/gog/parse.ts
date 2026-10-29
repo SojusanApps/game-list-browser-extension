@@ -6,7 +6,13 @@ interface UserDataPayload {
 /** Shape of `https://embed.gog.com/account/getFilteredProducts`; only the fields we read. */
 interface FilteredProductsPayload {
   totalPages?: unknown;
-  products?: { title?: unknown }[];
+  products?: { id?: unknown; title?: unknown }[];
+}
+
+/** A GOG product: its numeric id as a string, and its title. */
+export interface GogProduct {
+  id: string;
+  title: string;
 }
 
 /** Shape of `https://embed.gog.com/user/wishlist.json`: product ids as keys. */
@@ -18,21 +24,22 @@ export function parseIsLoggedIn(payload: unknown): boolean {
   return (payload as UserDataPayload | null)?.isLoggedIn === true;
 }
 
-function toTitles(items: unknown): string[] {
+function toProducts(items: unknown): GogProduct[] {
   if (!Array.isArray(items)) return [];
-  const titles: string[] = [];
+  const products: GogProduct[] = [];
   for (const item of items) {
-    const title = (item as { title?: unknown } | null)?.title;
-    if (typeof title === "string" && title.trim()) titles.push(title);
+    const { id, title } = (item ?? {}) as { id?: unknown; title?: unknown };
+    const hasId = typeof id === "number" ? Number.isInteger(id) : typeof id === "string" && id.trim() !== "";
+    if (hasId && typeof title === "string" && title.trim()) products.push({ id: String(id), title });
   }
-  return titles;
+  return products;
 }
 
-/** One page of the owned library: its titles and how many pages there are in total. */
-export function parseOwnedPage(payload: unknown): { titles: string[]; totalPages: number } {
+/** One page of the owned library: its products and how many pages there are in total. */
+export function parseOwnedPage(payload: unknown): { products: GogProduct[]; totalPages: number } {
   const { totalPages, products } = (payload ?? {}) as FilteredProductsPayload;
   return {
-    titles: toTitles(products),
+    products: toProducts(products),
     totalPages: typeof totalPages === "number" && Number.isInteger(totalPages) ? totalPages : 1,
   };
 }
@@ -44,7 +51,7 @@ export function parseWishlistIds(payload: unknown): string[] {
   return Object.keys(wishlist);
 }
 
-/** Titles from a `https://api.gog.com/products?ids=` response. */
-export function parseProductTitles(payload: unknown): string[] {
-  return toTitles(payload);
+/** Products from a `https://api.gog.com/products?ids=` response. */
+export function parseProducts(payload: unknown): GogProduct[] {
+  return toProducts(payload);
 }

@@ -2,7 +2,7 @@ import browser from "webextension-polyfill";
 
 import { createEpicAdapter } from "./adapter";
 
-const STORE_HOME_URL = "https://store.epicgames.com/";
+const WISHLIST_PAGE_URL = "https://store.epicgames.com/wishlist";
 const WARMUP_LOAD_TIMEOUT_MS = 20_000;
 /** Extra time after the page loads for its scripts to finish issuing the session cookies. */
 const WARMUP_SETTLE_MS = 3000;
@@ -23,7 +23,7 @@ function waitForTabLoad(tabId: number): Promise<void> {
 }
 
 async function warmupStoreSession(): Promise<void> {
-  const tab = await browser.tabs.create({ url: STORE_HOME_URL, active: false });
+  const tab = await browser.tabs.create({ url: WISHLIST_PAGE_URL, active: false });
   if (tab.id !== undefined) await waitForTabLoad(tab.id);
   await new Promise(resolve => setTimeout(resolve, WARMUP_SETTLE_MS));
   if (tab.id !== undefined) await browser.tabs.remove(tab.id).catch(() => undefined);

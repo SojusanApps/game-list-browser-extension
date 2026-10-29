@@ -1,16 +1,25 @@
 /** Message contract between the GameList frontend page and the extension. See docs/frontend-contract.md. */
-export const CONTRACT_VERSION = 1;
+export const CONTRACT_VERSION = 2;
 
 export const PLATFORMS = ["steam", "epic", "playstation", "nintendo", "gog"] as const;
 export type Platform = (typeof PLATFORMS)[number];
 
 export type SyncStatus = "ok" | "not_logged_in" | "error";
 
-/** Result of one Platform Sync. `titles` is empty unless `status` is `ok`. */
+/** One game of a Platform Library. */
+export interface LibraryEntry {
+  /** The Platform's own id of the game, always a string. */
+  storeId: string;
+  title: string;
+  /** True when the game is only on the wishlist; false when the user owns it. */
+  wishlisted: boolean;
+}
+
+/** Result of one Platform Sync. `entries` is empty unless `status` is `ok`. */
 export interface SyncResult {
   platform: Platform;
   status: SyncStatus;
-  titles: string[];
+  entries: LibraryEntry[];
   count: number;
   /** Human-readable detail, only set when `status` is `error`. */
   error?: string;

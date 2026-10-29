@@ -1,4 +1,10 @@
 {
   "totalPages": 2,
-  "products": [{ "title": "The Witcher 3: Wild Hunt" }, { "title": " " }, { "id": 1 }, { "title": "Cyberpunk 2077" }]
+  "products": [
+    { "id": 1207658930, "title": "The Witcher 3: Wild Hunt" },
+    { "id": 1, "title": " " },
+    { "id": 2 },
+    { "title": "No Id" },
+    { "id": 1423049311, "title": "Cyberpunk 2077" }
+  ]
 }

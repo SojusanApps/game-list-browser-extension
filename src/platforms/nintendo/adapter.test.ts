@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { NotLoggedInError } from "../adapter";
+import { MissingStoreIdError, NotLoggedInError } from "../adapter";
 import { createNintendoAdapter, type NintendoDeps } from "./core";
 import {
   CLIENT_ID_COLLECTION,
@@ -83,20 +83,20 @@ function setup(options: Options = {}) {
 }
 
 describe("nintendo adapter", () => {
-  it("returns collection and wishlist titles raw, collection first", async () => {
+  it("returns collection entries then wishlist entries raw, collection first", async () => {
     const { adapter, store } = setup();
-    expect(await adapter.fetchTitles()).toEqual([
-      "The Legend of Zelda: Tears of the Kingdom",
-      "Hades",
-      "Hades",
-      "Celeste Bundle",
+    expect(await adapter.fetchEntries()).toEqual([
+      { storeId: "70010000063714", title: "The Legend of Zelda: Tears of the Kingdom", wishlisted: false },
+      { storeId: "70010000000001", title: "Hades", wishlisted: false },
+      { storeId: "70010000000001", title: "Hades", wishlisted: true },
+      { storeId: "70010000000002", title: "Celeste Bundle", wishlisted: true },
     ]);
     expect(Object.values(store)).toEqual([QUERY_HASH, CLIENT_ID_SHOP]);
   });
 
   it("sends the discovered client id on both graphql calls", async () => {
     const { adapter, fetchMock } = setup();
-    await adapter.fetchTitles();
+    await adapter.fetchEntries();
     const clientIds = fetchMock.mock.calls
       .map(([, init]) => (init?.headers as Record<string, string> | undefined)?.["X-Nintendo-Savanna-Client-Id"])
       .filter(Boolean);
@@ -106,12 +106,12 @@ describe("nintendo adapter", () => {
 
   it("throws NotLoggedInError when the collection page redirects to login", async () => {
     const { adapter } = setup({ collectionResult: { status: "redirected" } });
-    await expect(adapter.fetchTitles()).rejects.toBeInstanceOf(NotLoggedInError);
+    await expect(adapter.fetchEntries()).rejects.toBeInstanceOf(NotLoggedInError);
   });
 
   it("throws NotLoggedInError when the shop session cannot be refreshed", async () => {
     const { adapter } = setup({ session: null });
-    await expect(adapter.fetchTitles()).rejects.toBeInstanceOf(NotLoggedInError);
+    await expect(adapter.fetchEntries()).rejects.toBeInstanceOf(NotLoggedInError);
   });
 
   it("rediscovers the query hash once when Nintendo reports it as outdated", async () => {
@@ -126,15 +126,56 @@ describe("nintendo adapter", () => {
           : (undefined as never);
       },
     });
-    await adapter.fetchTitles();
+    await adapter.fetchEntries();
     expect(wishlistCalls).toBe(2);
     expect(store.nintendoWishlistQueryHash).toBe(QUERY_HASH);
+  });
+
+  it("fails when the collection has games but none with an nsUid", async () => {
+    const withoutIds = {
+      data: {
+        account: {
+          vgc: {
+            vgcViews: { views: [{ id: "v1", applicationName: "Hades" }], offsetInfo: { total: 1, offset: 0 } },
+          },
+        },
+      },
+    };
+    const { adapter } = setup({
+      graphql: (_, init) => (init?.method === "POST" ? json(withoutIds) : (undefined as never)),
+    });
+    await expect(adapter.fetchEntries()).rejects.toBeInstanceOf(MissingStoreIdError);
+  });
+
+  it("tries the next id field when Nintendo rejects the first one", async () => {
+    const queries: string[] = [];
+    const rejected = json({
+      errors: [{ message: "error", extensions: { title: "INVALID_PARAM", errorCode: "1802" } }],
+    });
+    const { adapter } = setup({
+      graphql: (_, init) => {
+        if (init?.method !== "POST") return undefined as never;
+        const query = (JSON.parse(String(init.body)) as { query: string }).query;
+        queries.push(query);
+        return query.includes("nsUid") ? rejected : (undefined as never);
+      },
+    });
+    const entries = await adapter.fetchEntries();
+    expect(queries.some(query => query.includes("applicationId"))).toBe(true);
+    expect(entries.length).toBeGreaterThan(0);
+  });
+
+  it("fails with the rejection text when every id field is rejected", async () => {
+    const rejected = () =>
+      json({ errors: [{ message: "error", extensions: { title: "INVALID_PARAM", errorCode: "1802" } }] });
+    const { adapter } = setup({ graphql: (_, init) => (init?.method === "POST" ? rejected() : (undefined as never)) });
+    await expect(adapter.fetchEntries()).rejects.toThrow(/rejected the collection query.*INVALID_PARAM 1802/);
   });
 
   it("maps a 401 from the wishlist endpoint to NotLoggedInError", async () => {
     const { adapter } = setup({
       graphql: (_, init) => (init?.method === "POST" ? (undefined as never) : json({}, 401)),
     });
-    await expect(adapter.fetchTitles()).rejects.toBeInstanceOf(NotLoggedInError);
+    await expect(adapter.fetchEntries()).rejects.toBeInstanceOf(NotLoggedInError);
   });
 });

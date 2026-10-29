@@ -1,0 +1,10 @@
+{
+  "extName": {
+    "message": "SojusanApps - Browser Extension",
+    "description": "Extension name, shown in the store and the toolbar."
+  },
+  "extDescription": {
+    "message": "Fills the GameList Title Import page with the games you own or wishlist on Steam, Epic, GOG, PlayStation and Nintendo.",
+    "description": "Short store description. Chrome limits it to 132 characters."
+  }
+}

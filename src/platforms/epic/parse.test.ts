@@ -2,14 +2,16 @@ import { describe, expect, it } from "vitest";
 
 import * as fixtures from "./fixtures";
 import {
-  excludeUnrealAssets,
   groupByNamespace,
   isWishlistNotLoggedIn,
+  libraryNamespaces,
+  namespaceBaseGame,
   parseAuthorizationCode,
-  parseCatalogTitles,
+  parseBulkOffers,
   parseLibraryPage,
+  parseOffersPage,
   parseToken,
-  parseWishlistTitles,
+  parseWishlistItems,
 } from "./parse";
 
 describe("parseAuthorizationCode", () => {
@@ -45,56 +47,101 @@ describe("parseLibraryPage", () => {
   });
 });
 
-describe("groupByNamespace", () => {
-  it("groups and de-duplicates ids", () => {
-    const groups = groupByNamespace([
-      { namespace: "a", catalogItemId: "1" },
-      { namespace: "a", catalogItemId: "1" },
-      { namespace: "b", catalogItemId: "2" },
+describe("libraryNamespaces", () => {
+  it("lists each namespace once, in first-seen order", () => {
+    expect(
+      libraryNamespaces([
+        { namespace: "b", catalogItemId: "1" },
+        { namespace: "a", catalogItemId: "2" },
+        { namespace: "b", catalogItemId: "3" },
+      ]),
+    ).toEqual(["b", "a"]);
+  });
+
+  it("leaves out the Unreal Engine Marketplace namespace, which is never listed", () => {
+    expect(
+      libraryNamespaces([
+        { namespace: "ue", catalogItemId: "asset-1" },
+        { namespace: "a", catalogItemId: "1" },
+      ]),
+    ).toEqual(["a"]);
+  });
+});
+
+describe("parseOffersPage", () => {
+  it("reads offer ids, titles and types and the total, skipping offers without an id or title", () => {
+    expect(
+      parseOffersPage({
+        elements: [{ id: "o1", title: "One", offerType: "BASE_GAME" }, { id: "o2", title: "Two" }, { id: "o3" }],
+        paging: { count: 100, start: 0, total: 3 },
+      }),
+    ).toEqual({
+      offers: [
+        { id: "o1", title: "One", offerType: "BASE_GAME" },
+        { id: "o2", title: "Two", offerType: null },
+      ],
+      total: 3,
+    });
+    expect(parseOffersPage("nope")).toEqual({ offers: [], total: 0 });
+  });
+});
+
+describe("parseBulkOffers", () => {
+  it("reads the offers of the id-keyed map", () => {
+    expect(parseBulkOffers(fixtures.bulkOffersNsW)).toEqual([
+      { id: "o1", title: "Wished One", offerType: "BASE_GAME" },
+      { id: "o2", title: "Wished Two", offerType: "BASE_GAME" },
+      { id: "o3", title: "Wished Add-on", offerType: "OTHERS" },
     ]);
-    expect([...groups]).toEqual([
+    expect(parseBulkOffers([])).toEqual([]);
+  });
+});
+
+describe("groupByNamespace", () => {
+  it("groups and de-duplicates offer ids", () => {
+    expect([
+      ...groupByNamespace([
+        { namespace: "a", offerId: "1" },
+        { namespace: "a", offerId: "1" },
+        { namespace: "b", offerId: "2" },
+      ]),
+    ]).toEqual([
       ["a", ["1"]],
       ["b", ["2"]],
     ]);
   });
 });
 
-describe("parseCatalogTitles", () => {
-  it("returns titles and skips items without one", () => {
-    expect(parseCatalogTitles(fixtures.catalogNsB)).toEqual(["Gamma Game"]);
-    expect(parseCatalogTitles([])).toEqual([]);
+describe("namespaceBaseGame", () => {
+  const base = (id: string) => ({ id, title: id, offerType: "BASE_GAME" });
+  const other = { id: "x", title: "x", offerType: "OTHERS" };
+
+  it("picks the single base game and ignores other offer types", () => {
+    expect(namespaceBaseGame([other, base("a")])).toEqual(base("a"));
+  });
+
+  it("yields null when there is no base game or more than one", () => {
+    expect(namespaceBaseGame([other])).toBeNull();
+    expect(namespaceBaseGame([base("a"), base("b")])).toBeNull();
   });
 });
 
 describe("wishlist parsing", () => {
-  it("reads offer titles", () => {
-    expect(parseWishlistTitles(fixtures.wishlistOk)).toEqual(["Wished One", "Wished Two"]);
-    expect(parseWishlistTitles(fixtures.wishlistNotLoggedIn)).toEqual([]);
+  it("reads offer ids with their namespaces, skipping elements without either", () => {
+    expect(parseWishlistItems(fixtures.wishlistOk)).toEqual({
+      items: [
+        { offerId: "o1", namespace: "ns-w" },
+        { offerId: "o2", namespace: "ns-w" },
+        { offerId: "o3", namespace: "ns-w" },
+        { offerId: "o-gone", namespace: "ns-w" },
+      ],
+      elements: 5,
+    });
+    expect(parseWishlistItems(fixtures.wishlistNotLoggedIn)).toEqual({ items: [], elements: 0 });
   });
 
   it("detects the not-logged-in error", () => {
     expect(isWishlistNotLoggedIn(fixtures.wishlistNotLoggedIn)).toBe(true);
     expect(isWishlistNotLoggedIn(fixtures.wishlistOk)).toBe(false);
-  });
-});
-
-describe("Unreal Engine content filtering", () => {
-  it("drops library records in the ue namespace", () => {
-    const records = [
-      { namespace: "ue", catalogItemId: "asset-1" },
-      { namespace: "ns-a", catalogItemId: "item-1" },
-    ];
-    expect(excludeUnrealAssets(records)).toEqual([{ namespace: "ns-a", catalogItemId: "item-1" }]);
-  });
-
-  it("skips catalog items categorised as assets, plugins or engine", () => {
-    const payload = {
-      a: { title: "Real Game", categories: [{ path: "games" }, { path: "applications" }] },
-      b: { title: "Rock Pack", categories: [{ path: "assets/environments" }] },
-      c: { title: "Some Plugin", categories: [{ path: "plugins" }] },
-      d: { title: "Unreal Engine", categories: [{ path: "Engine" }] },
-      e: { title: "No Categories" },
-    };
-    expect(parseCatalogTitles(payload)).toEqual(["Real Game", "No Categories"]);
   });
 });

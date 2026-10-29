@@ -1,3 +1,4 @@
+import { SyncError } from "../../errors";
 import {
   GRAPHQL_HOST,
   GRAPHQL_LANGUAGE,
@@ -24,7 +25,7 @@ export interface NintendoSession {
 
 export interface GraphqlError {
   message?: string;
-  extensions?: { type?: string; title?: string; errorCode?: string };
+  extensions?: { type?: string; title?: string; errorCode?: string; detail?: string };
 }
 
 export interface GraphqlPayload {
@@ -32,9 +33,15 @@ export interface GraphqlPayload {
   data?: unknown;
 }
 
+/** A game as listed by Nintendo: its `nsUid` (as a string) and title. */
+export interface NintendoGame {
+  storeId: string;
+  title: string;
+}
+
 export interface TitlePage {
-  titles: string[];
-  /** Number of raw entries on the page, including ones without a usable title. */
+  games: NintendoGame[];
+  /** Number of raw entries on the page, including ones without a usable title or id. */
   entries: number;
   total: number | null;
 }
@@ -130,6 +137,13 @@ export function isAuthError(payload: GraphqlPayload): boolean {
   );
 }
 
+/** The error Nintendo gives for any rejected parameter, a query field the schema lacks included. */
+export function isInvalidParamError(payload: GraphqlPayload): boolean {
+  return (payload.errors ?? []).some(
+    error => trimmed(error.extensions?.errorCode) === "1802" && trimmed(error.extensions?.title) === "INVALID_PARAM",
+  );
+}
+
 /** Nintendo answers an unknown or rotated persisted-query hash with INVALID_PARAM / 1802. */
 export function isQueryHashError(payload: GraphqlPayload): boolean {
   return (payload.errors ?? []).some(
@@ -140,8 +154,21 @@ export function isQueryHashError(payload: GraphqlPayload): boolean {
   );
 }
 
-export function firstErrorMessage(payload: GraphqlPayload, fallback: string): string {
-  return trimmed(payload.errors?.[0]?.message) || fallback;
+/** One readable line for a GraphQL error; Nintendo's `message` is often just "error", the detail is in `extensions`. */
+function describeError(error: GraphqlError): string {
+  const { title, errorCode, detail } = error.extensions ?? {};
+  const extra = [trimmed(title), trimmed(errorCode), trimmed(detail)].filter(Boolean).join(" ");
+  const message = trimmed(error.message);
+  if (!extra) return message;
+  return message && message.toLowerCase() !== extra.toLowerCase() ? `${message} (${extra})` : extra;
+}
+
+/** The first GraphQL error as one line, with the count of further errors; null when there is none. */
+export function firstErrorMessage(payload: GraphqlPayload): string | null {
+  const errors = payload.errors ?? [];
+  const first = errors[0] ? describeError(errors[0]) : "";
+  if (!first) return null;
+  return errors.length > 1 ? `${first} (+${errors.length - 1})` : first;
 }
 
 function total(offsetInfo: unknown): number | null {
@@ -156,7 +183,38 @@ function total(offsetInfo: unknown): number | null {
 export function wishlistItemTitle(item: unknown): string {
   const entry = (item ?? {}) as Record<string, unknown>;
   const itemV2 = (entry.itemV2 ?? {}) as Record<string, unknown>;
-  return trimmed(itemV2.formalName) || trimmed(itemV2.name) || trimmed(itemV2.title) || trimmed(entry.name) || trimmed(entry.title);
+  return (
+    trimmed(itemV2.formalName) ||
+    trimmed(itemV2.name) ||
+    trimmed(itemV2.title) ||
+    trimmed(entry.name) ||
+    trimmed(entry.title)
+  );
+}
+
+/** `nsUid` as a trimmed string; Nintendo sends it as a number on some objects and a string on others. */
+export function nsUidOf(value: unknown): string {
+  return typeof value === "number" && Number.isSafeInteger(value) ? String(value) : trimmed(value);
+}
+
+/** A wishlist entry's `nsUid`: on the entry itself, else on its `itemV2`. */
+function wishlistItemId(item: unknown): string {
+  const entry = (item ?? {}) as Record<string, unknown>;
+  return nsUidOf(entry.nsUid) || nsUidOf((entry.itemV2 as Record<string, unknown> | null | undefined)?.nsUid);
+}
+
+function toGames(
+  items: unknown[],
+  idOf: (item: unknown) => string,
+  titleOf: (item: unknown) => string,
+): NintendoGame[] {
+  const games: NintendoGame[] = [];
+  for (const item of items) {
+    const storeId = idOf(item);
+    const title = titleOf(item);
+    if (storeId && title) games.push({ storeId, title });
+  }
+  return games;
 }
 
 export function parseWishlistPage(payload: GraphqlPayload): TitlePage {
@@ -166,10 +224,10 @@ export function parseWishlistPage(payload: GraphqlPayload): TitlePage {
       | undefined
   )?.account?.wishlist?.wishlistItems;
   if (!wishlistItems || !Array.isArray(wishlistItems.items)) {
-    throw new Error("Nintendo wishlist: data.account.wishlist.wishlistItems is missing in response");
+    throw new SyncError("unexpectedResponse", { platform: "nintendo", field: "data.account.wishlist.wishlistItems" });
   }
   return {
-    titles: wishlistItems.items.map(wishlistItemTitle).filter(Boolean),
+    games: toGames(wishlistItems.items, wishlistItemId, wishlistItemTitle),
     entries: wishlistItems.items.length,
     total: total(wishlistItems.offsetInfo),
   };
@@ -180,12 +238,16 @@ export function parseCollectionPage(payload: GraphqlPayload): TitlePage {
     payload.data as { account?: { vgc?: { vgcViews?: { views?: unknown; offsetInfo?: unknown } } } } | undefined
   )?.account?.vgc?.vgcViews;
   if (!vgcViews || !Array.isArray(vgcViews.views)) {
-    throw new Error("Nintendo collection: data.account.vgc.vgcViews is missing in response");
+    throw new SyncError("unexpectedResponse", { platform: "nintendo", field: "data.account.vgc.vgcViews" });
   }
   return {
-    titles: vgcViews.views
-      .map(view => trimmed((view as { applicationName?: unknown }).applicationName))
-      .filter(Boolean),
+    // UNVERIFIED against a real response: `nsUid` on a VGC view is assumed to be the same id the wishlist uses.
+    games: toGames(
+      vgcViews.views,
+      view =>
+        nsUidOf((view as { nsUid?: unknown }).nsUid) || nsUidOf((view as { applicationId?: unknown }).applicationId),
+      view => trimmed((view as { applicationName?: unknown }).applicationName),
+    ),
     entries: vgcViews.views.length,
     total: total(vgcViews.offsetInfo),
   };

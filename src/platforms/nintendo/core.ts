@@ -1,4 +1,6 @@
-import { NotLoggedInError, type PlatformAdapter } from "../adapter";
+import type { LibraryEntry } from "../../contract";
+import { SyncError } from "../../errors";
+import { MissingStoreIdError, NotLoggedInError, type PlatformAdapter } from "../adapter";
 import {
   CLIENT_ID_STORAGE_KEY,
   COLLECTION_OPERATION,
@@ -26,9 +28,11 @@ import {
   type GraphqlPayload,
   idTokenCountry,
   isAuthError,
+  isInvalidParamError,
   isQueryHashError,
   isSessionFresh,
   isSha256Hex,
+  type NintendoGame,
   type NintendoSession,
   parseCollectionPage,
   parseWishlistPage,
@@ -36,7 +40,7 @@ import {
   type TitlePage,
   trimmed,
 } from "./parse";
-import { COLLECTION_QUERY } from "./query";
+import { COLLECTION_ID_FIELDS, type CollectionIdField, collectionQuery } from "./query";
 import type { PageInspector } from "./tabs";
 
 const SHOP_HOST = "ec.nintendo.com";
@@ -56,6 +60,9 @@ export interface NintendoDeps {
   inspector: PageInspector;
   storage: NintendoStorage;
 }
+
+/** Nintendo rejected the collection query, most likely because the id field tried does not exist. */
+class CollectionFieldRejectedError extends Error {}
 
 /** The stored persisted-query hash no longer matches the one Nintendo's wishlist frontend uses. */
 class QueryHashOutdatedError extends Error {}
@@ -121,17 +128,17 @@ async function getWishlistConfig(deps: NintendoDeps): Promise<{ config: Wishlist
     },
   });
   if (found.status === "redirected") throw new NotLoggedInError("nintendo");
-  if (found.status === "timeout") throw new Error("Could not discover the Nintendo wishlist configuration");
+  if (found.status === "timeout") throw new SyncError("nintendoConfigNotFound", {});
 
   await deps.storage.set(QUERY_HASH_STORAGE_KEY, found.value.queryHash);
   await deps.storage.set(CLIENT_ID_STORAGE_KEY, found.value.clientId);
   return { config: found.value, fromStorage: false };
 }
 
-async function readGraphqlPayload(response: Response, what: string): Promise<GraphqlPayload> {
+async function readGraphqlPayload(response: Response, step: "wishlist" | "collection"): Promise<GraphqlPayload> {
   if (response.status === 401 || response.status === 403) throw new NotLoggedInError("nintendo");
   const payload = (await response.json().catch(() => null)) as GraphqlPayload | null;
-  if (!payload) throw new Error(`Nintendo ${what} request returned invalid JSON (HTTP ${response.status})`);
+  if (!payload) throw new SyncError("invalidResponse", { platform: "nintendo", step, status: response.status });
   if (isAuthError(payload)) throw new NotLoggedInError("nintendo");
   return payload;
 }
@@ -152,45 +159,54 @@ async function fetchWishlistPage(deps: NintendoDeps, url: string, clientId: stri
   const payload = await readGraphqlPayload(response, "wishlist");
   if (isQueryHashError(payload)) throw new QueryHashOutdatedError("Nintendo wishlist query hash is outdated");
   if (!response.ok || payload.errors?.length) {
-    throw new Error(firstErrorMessage(payload, `Nintendo wishlist request failed (HTTP ${response.status})`));
+    throw new SyncError("requestFailed", {
+      platform: "nintendo",
+      step: "wishlist",
+      status: response.status,
+      detail: firstErrorMessage(payload) ?? undefined,
+    });
   }
   return parseWishlistPage(payload);
 }
 
 /** Pages through a Nintendo list until `total` entries were seen or a page comes back short or empty. */
-async function paginate(pageSize: number, fetchPage: (offset: number) => Promise<TitlePage>): Promise<string[]> {
-  const titles: string[] = [];
+async function paginate(
+  step: "wishlist" | "collection",
+  pageSize: number,
+  fetchPage: (offset: number) => Promise<TitlePage>,
+): Promise<{ games: NintendoGame[]; raw: number }> {
+  const games: NintendoGame[] = [];
   let seen = 0;
   for (let page = 1; page <= MAX_PAGES; page++) {
     const result = await fetchPage(seen);
-    titles.push(...result.titles);
+    games.push(...result.games);
     seen += result.entries;
-    if (result.entries === 0) return titles;
-    if (result.total !== null ? seen >= result.total : result.entries < pageSize) return titles;
+    if (result.entries === 0) return { games, raw: seen };
+    if (result.total !== null ? seen >= result.total : result.entries < pageSize) return { games, raw: seen };
   }
-  throw new Error(`Nintendo pagination exceeded the page limit (${MAX_PAGES} pages)`);
+  throw new SyncError("tooManyPages", { platform: "nintendo", step });
 }
 
-async function fetchWishlistTitles(deps: NintendoDeps): Promise<string[]> {
+async function fetchWishlistGames(deps: NintendoDeps): Promise<NintendoGame[]> {
   const session = await getFreshSession(deps);
   const idToken = trimmed(session.idToken);
   const country = sessionCountry(session);
-  if (!country) throw new Error("Nintendo session is missing the country required for the wishlist request");
+  if (!country) throw new SyncError("nintendoCountryMissing", { step: "wishlist" });
 
   const attempt = (config: WishlistConfig) =>
-    paginate(WISHLIST_PAGE_SIZE, offset =>
+    paginate("wishlist", WISHLIST_PAGE_SIZE, offset =>
       fetchWishlistPage(deps, buildWishlistRequestUrl(country, idToken, offset, config.queryHash), config.clientId),
     );
 
   const { config, fromStorage } = await getWishlistConfig(deps);
   try {
-    return await attempt(config);
+    return (await attempt(config)).games;
   } catch (error) {
     // Stored values may be outdated in ways Nintendo does not report as a hash error (e.g. a rotated
     // client id), so stored values get one retry with freshly discovered ones.
     if (error instanceof NotLoggedInError || !(error instanceof QueryHashOutdatedError || fromStorage)) throw error;
     await deps.storage.remove([QUERY_HASH_STORAGE_KEY, CLIENT_ID_STORAGE_KEY]);
-    return attempt((await getWishlistConfig(deps)).config);
+    return (await attempt((await getWishlistConfig(deps)).config)).games;
   }
 }
 
@@ -213,10 +229,10 @@ async function getCollectionBootstrap(deps: NintendoDeps): Promise<CollectionBoo
   });
   // A logged-out user is redirected from the VGC portal to the Nintendo Account login page.
   if (found.status === "redirected") throw new NotLoggedInError("nintendo");
-  if (found.status === "timeout") throw new Error("Could not read the Nintendo collection page");
+  if (found.status === "timeout") throw new SyncError("nintendoPageUnreadable", {});
 
   const country = idTokenCountry(found.value.idToken);
-  if (!country) throw new Error("Nintendo collection idToken is missing the country claim");
+  if (!country) throw new SyncError("nintendoCountryMissing", { step: "collection" });
   return { ...found.value, country };
 }
 
@@ -225,6 +241,7 @@ async function fetchCollectionPage(
   bootstrap: CollectionBootstrap,
   offset: number,
   isHidden: boolean,
+  idField: CollectionIdField,
 ): Promise<TitlePage> {
   const response = await deps.fetch(GRAPHQL_URL, {
     method: "POST",
@@ -239,7 +256,7 @@ async function fetchCollectionPage(
     },
     body: JSON.stringify({
       operationName: COLLECTION_OPERATION,
-      query: COLLECTION_QUERY,
+      query: collectionQuery(idField),
       variables: {
         idToken: bootstrap.idToken,
         isHidden,
@@ -257,25 +274,52 @@ async function fetchCollectionPage(
     }),
   });
   const payload = await readGraphqlPayload(response, "collection");
+  if (isInvalidParamError(payload))
+    throw new CollectionFieldRejectedError(firstErrorMessage(payload) ?? "INVALID_PARAM");
   if (!response.ok || payload.errors?.length) {
-    throw new Error(firstErrorMessage(payload, `Nintendo collection request failed (HTTP ${response.status})`));
+    throw new SyncError("requestFailed", {
+      platform: "nintendo",
+      step: "collection",
+      status: response.status,
+      detail: firstErrorMessage(payload) ?? undefined,
+    });
   }
   return parseCollectionPage(payload);
 }
 
-async function fetchCollectionTitles(deps: NintendoDeps): Promise<string[]> {
+async function fetchCollectionGames(deps: NintendoDeps): Promise<NintendoGame[]> {
   const bootstrap = await getCollectionBootstrap(deps);
-  const visible = await paginate(COLLECTION_PAGE_SIZE, offset => fetchCollectionPage(deps, bootstrap, offset, false));
-  const hidden = await paginate(COLLECTION_PAGE_SIZE, offset => fetchCollectionPage(deps, bootstrap, offset, true));
-  return [...visible, ...hidden];
+  let rejected = "";
+  for (const idField of COLLECTION_ID_FIELDS) {
+    try {
+      const visible = await paginate("collection", COLLECTION_PAGE_SIZE, offset =>
+        fetchCollectionPage(deps, bootstrap, offset, false, idField),
+      );
+      const hidden = await paginate("collection", COLLECTION_PAGE_SIZE, offset =>
+        fetchCollectionPage(deps, bootstrap, offset, true, idField),
+      );
+      // A collection with views but not a single usable id means the field is not what we assume it is.
+      if (visible.raw + hidden.raw > 0 && visible.games.length + hidden.games.length === 0) {
+        throw new MissingStoreIdError("nintendo", idField);
+      }
+      return [...visible.games, ...hidden.games];
+    } catch (error) {
+      if (!(error instanceof CollectionFieldRejectedError)) throw error;
+      rejected = error.message;
+    }
+  }
+  throw new SyncError("nintendoCollectionRejected", { fields: COLLECTION_ID_FIELDS.join(", "), detail: rejected });
 }
+
+const toEntries = (games: NintendoGame[], wishlisted: boolean): LibraryEntry[] =>
+  games.map(({ storeId, title }) => ({ storeId, title, wishlisted }));
 
 export function createNintendoAdapter(deps: NintendoDeps): PlatformAdapter {
   return {
-    async fetchTitles() {
-      const collection = await fetchCollectionTitles(deps);
-      const wishlist = await fetchWishlistTitles(deps);
-      return [...collection, ...wishlist];
+    async fetchEntries() {
+      const collection = await fetchCollectionGames(deps);
+      const wishlist = await fetchWishlistGames(deps);
+      return [...toEntries(collection, false), ...toEntries(wishlist, true)];
     },
   };
 }

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import { buildManifest, FRONTEND_MATCHES } from "./manifest";
@@ -37,5 +39,18 @@ describe("buildManifest", () => {
     const hosts = buildManifest("chromium", "1.0.0").host_permissions as string[];
     expect(hosts).not.toContain("https://*/*");
     expect(hosts).not.toContain("<all_urls>");
+  });
+
+  it("localises the name and description from _locales, with en as the default", () => {
+    const manifest = buildManifest("chromium", "1.0.0");
+    expect(manifest.default_locale).toBe("en");
+    expect(manifest.name).toBe("__MSG_extName__");
+    expect(manifest.description).toBe("__MSG_extDescription__");
+  });
+
+  it.each(["en", "pl"])("keeps the %s description within the Chrome Web Store limit", locale => {
+    const messages = JSON.parse(readFileSync(`public/_locales/${locale}/messages.json`, "utf8"));
+    expect(messages.extName.message.length).toBeLessThanOrEqual(75);
+    expect(messages.extDescription.message.length).toBeLessThanOrEqual(132);
   });
 });
