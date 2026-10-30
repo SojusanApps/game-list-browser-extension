@@ -1,4 +1,5 @@
-import type { Platform } from "../contract";
+import type { LibraryEntry, Platform } from "../contract";
+import { SyncError } from "../errors";
 
 /** Thrown by an adapter when the user has no logged-in session on the platform. */
 export class NotLoggedInError extends Error {
@@ -8,9 +9,17 @@ export class NotLoggedInError extends Error {
   }
 }
 
-/** Reads one Platform Library (owned and wishlisted games) and returns its raw titles. */
+/** Reads one Platform Library (owned and wishlisted games) and returns its raw entries. */
 export interface PlatformAdapter {
-  fetchTitles(): Promise<string[]>;
+  fetchEntries(): Promise<LibraryEntry[]>;
+}
+
+/** Thrown when a non-empty library yields no entry with a usable store id, so the id field is probably wrong. */
+export class MissingStoreIdError extends SyncError<"missingStoreId"> {
+  constructor(platform: Platform, field: string) {
+    super("missingStoreId", { platform, field });
+    this.name = "MissingStoreIdError";
+  }
 }
 
 export type AdapterRegistry = Partial<Record<Platform, PlatformAdapter>>;

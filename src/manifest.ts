@@ -29,12 +29,13 @@ const ICONS = {
 export function buildManifest(browser: Browser, version: string): Record<string, unknown> {
   const manifest: Record<string, unknown> = {
     manifest_version: 3,
-    name: "Sojusan GameList",
+    // Strings live in public/_locales/<lang>/messages.json (en is the default, pl is translated).
+    default_locale: "en",
+    name: "__MSG_extName__",
     version,
-    description:
-      "Fills the GameList Title Import page with the games you own or wishlist on Steam, Epic, GOG, PlayStation and Nintendo.",
+    description: "__MSG_extDescription__",
     icons: ICONS,
-    action: { default_popup: "popup.html", default_title: "Sojusan GameList", default_icon: ICONS },
+    action: { default_popup: "popup.html", default_title: "__MSG_extName__", default_icon: ICONS },
     // nintendo adapter: `scripting` reads page state from background discovery tabs, `storage` caches the query hash.
     permissions: ["scripting", "storage"],
     host_permissions: PLATFORM_HOST_PERMISSIONS,

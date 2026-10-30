@@ -1,31 +1,48 @@
-import type { Platform, SyncResult } from "./contract";
+import type { LibraryEntry, Platform, SyncResult } from "./contract";
+import { describeError, formatError } from "./errors";
 import { type AdapterRegistry, NotLoggedInError } from "./platforms/adapter";
+import type { Language } from "./popup/messages";
 
-/** Trims titles and drops blanks and exact duplicates, keeping first-seen order. */
-export function dedupeTitles(titles: readonly string[]): string[] {
-  const seen = new Set<string>();
-  for (const title of titles) {
-    const trimmed = title.trim();
-    if (trimmed) seen.add(trimmed);
+/**
+ * Trims entries, drops those without a store id or title, and keeps one entry per store id in first-seen order.
+ * A game that is both owned and wishlisted is kept as owned.
+ */
+export function dedupeEntries(entries: readonly LibraryEntry[]): LibraryEntry[] {
+  const byStoreId = new Map<string, LibraryEntry>();
+  for (const entry of entries) {
+    const storeId = entry.storeId.trim();
+    const title = entry.title.trim();
+    if (!storeId || !title) continue;
+    const existing = byStoreId.get(storeId);
+    if (!existing) byStoreId.set(storeId, { storeId, title, wishlisted: entry.wishlisted });
+    else if (existing.wishlisted && !entry.wishlisted) existing.wishlisted = false;
   }
-  return [...seen];
+  return [...byStoreId.values()];
 }
 
-/** Runs one Platform Sync and always resolves with a SyncResult, never throws. */
-export async function runSync(platform: Platform, adapters: AdapterRegistry): Promise<SyncResult> {
+/** Runs one Platform Sync and always resolves with a SyncResult, never throws. Error messages use `language`. */
+export async function runSync(
+  platform: Platform,
+  adapters: AdapterRegistry,
+  language: Language = "en",
+): Promise<SyncResult> {
   const adapter = adapters[platform];
   if (!adapter) {
-    return { platform, status: "error", titles: [], count: 0, error: `${platform} is not supported yet` };
+    return {
+      platform,
+      status: "error",
+      entries: [],
+      count: 0,
+      error: formatError(language, "unsupportedPlatform", { platform }),
+    };
   }
   try {
-    const rawTitles = await adapter.fetchTitles();
-    const titles = dedupeTitles(rawTitles);
-    return { platform, status: "ok", titles, count: titles.length };
+    const entries = dedupeEntries(await adapter.fetchEntries());
+    return { platform, status: "ok", entries, count: entries.length };
   } catch (error) {
     if (error instanceof NotLoggedInError) {
-      return { platform, status: "not_logged_in", titles: [], count: 0 };
+      return { platform, status: "not_logged_in", entries: [], count: 0 };
     }
-    const message = error instanceof Error ? error.message : String(error);
-    return { platform, status: "error", titles: [], count: 0, error: message };
+    return { platform, status: "error", entries: [], count: 0, error: describeError(error, language) };
   }
 }

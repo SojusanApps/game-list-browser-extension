@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import owned from "./fixtures/owned-page.json";
 import products from "./fixtures/products.json";
 import wishlist from "./fixtures/wishlist.json";
-import { parseIsLoggedIn, parseOwnedPage, parseProductTitles, parseWishlistIds } from "./parse";
+import { parseIsLoggedIn, parseOwnedPage, parseProducts, parseWishlistIds } from "./parse";
 
 describe("parseIsLoggedIn", () => {
   it("is true only for an explicit logged-in session", () => {
@@ -14,12 +14,18 @@ describe("parseIsLoggedIn", () => {
 });
 
 describe("parseOwnedPage", () => {
-  it("returns the titles and page count, skipping blank or missing titles", () => {
-    expect(parseOwnedPage(owned)).toEqual({ titles: ["The Witcher 3: Wild Hunt", "Cyberpunk 2077"], totalPages: 2 });
+  it("returns the products and page count, skipping those without a title or id", () => {
+    expect(parseOwnedPage(owned)).toEqual({
+      products: [
+        { id: "1207658930", title: "The Witcher 3: Wild Hunt" },
+        { id: "1423049311", title: "Cyberpunk 2077" },
+      ],
+      totalPages: 2,
+    });
   });
 
   it("falls back to a single empty page for malformed payloads", () => {
-    expect(parseOwnedPage(undefined)).toEqual({ titles: [], totalPages: 1 });
+    expect(parseOwnedPage(undefined)).toEqual({ products: [], totalPages: 1 });
   });
 });
 
@@ -34,12 +40,15 @@ describe("parseWishlistIds", () => {
   });
 });
 
-describe("parseProductTitles", () => {
-  it("returns product titles", () => {
-    expect(parseProductTitles(products)).toEqual(["Disco Elysium", "Hades"]);
+describe("parseProducts", () => {
+  it("returns product ids and titles", () => {
+    expect(parseProducts(products)).toEqual([
+      { id: "1207658924", title: "Disco Elysium" },
+      { id: "1207659060", title: "Hades" },
+    ]);
   });
 
   it("returns nothing for malformed payloads", () => {
-    expect(parseProductTitles({})).toEqual([]);
+    expect(parseProducts({})).toEqual([]);
   });
 });

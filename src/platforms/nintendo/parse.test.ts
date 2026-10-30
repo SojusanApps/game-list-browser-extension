@@ -17,6 +17,7 @@ import {
   idTokenCountry,
   isAuthError,
   isQueryHashError,
+  firstErrorMessage,
   isSessionFresh,
   parseCollectionPage,
   parseWishlistPage,
@@ -69,14 +70,51 @@ describe("graphql errors", () => {
   });
 });
 
-describe("page parsing", () => {
-  it("extracts trimmed wishlist titles and skips entries without a name", () => {
-    expect(parseWishlistPage(wishlistPage)).toEqual({ titles: ["Hades", "Celeste Bundle"], entries: 3, total: 3 });
+describe("firstErrorMessage", () => {
+  it("adds the extension details to a generic message", () => {
+    const payload = { errors: [{ message: "error", extensions: { title: "INVALID_PARAM", errorCode: "1802" } }] };
+    expect(firstErrorMessage(payload)).toBe("error (INVALID_PARAM 1802)");
   });
 
-  it("extracts collection titles", () => {
+  it("uses the extension details when there is no message, and notes further errors", () => {
+    const payload = { errors: [{ extensions: { detail: "Cannot query field nsUid" } }, { message: "x" }] };
+    expect(firstErrorMessage(payload)).toBe("Cannot query field nsUid (+1)");
+  });
+
+  it("returns null when there is nothing readable", () => {
+    expect(firstErrorMessage({ errors: [{}] })).toBeNull();
+    expect(firstErrorMessage({})).toBeNull();
+  });
+});
+
+describe("page parsing", () => {
+  it("extracts trimmed wishlist games with their nsUid and skips entries without a name", () => {
+    expect(parseWishlistPage(wishlistPage)).toEqual({
+      games: [
+        { storeId: "70010000000001", title: "Hades" },
+        { storeId: "70010000000002", title: "Celeste Bundle" },
+      ],
+      entries: 3,
+      total: 3,
+    });
+  });
+
+  it("reads a numeric nsUid and falls back to the one on itemV2", () => {
+    const item = (entry: unknown) =>
+      parseWishlistPage({ data: { account: { wishlist: { wishlistItems: { items: [entry] } } } } });
+    expect(item({ nsUid: 70010000096810, itemV2: { formalName: "A" } }).games).toEqual([
+      { storeId: "70010000096810", title: "A" },
+    ]);
+    expect(item({ itemV2: { nsUid: 7, formalName: "B" } }).games).toEqual([{ storeId: "7", title: "B" }]);
+    expect(item({ itemV2: { formalName: "No id" } }).games).toEqual([]);
+  });
+
+  it("extracts collection games with their nsUid", () => {
     expect(parseCollectionPage(collectionPage)).toEqual({
-      titles: ["The Legend of Zelda: Tears of the Kingdom", "Hades"],
+      games: [
+        { storeId: "70010000063714", title: "The Legend of Zelda: Tears of the Kingdom" },
+        { storeId: "70010000000001", title: "Hades" },
+      ],
       entries: 2,
       total: 2,
     });

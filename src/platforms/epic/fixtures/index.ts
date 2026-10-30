@@ -26,27 +26,50 @@ export const libraryPage1 = {
 };
 
 export const libraryPage2 = {
-  records: [{ namespace: "ns-b", catalogItemId: "item-4", appName: "Delta", recordType: "APPLICATION" }],
+  records: [{ namespace: "ns-c", catalogItemId: "item-4", appName: "Delta", recordType: "APPLICATION" }],
   responseMetadata: {},
 };
 
-export const catalogNsA = {
-  "item-1": { id: "item-1", title: "Alpha Game", namespace: "ns-a" },
-  "item-2": { id: "item-2", title: "Beta Game", namespace: "ns-a" },
+function offer(id: string, title: string, offerType: string) {
+  return { id, title, offerType, namespace: "ns", status: "ACTIVE", items: [{ id: `${id}-item` }] };
+}
+
+/** An offers page; `total` defaults to the number of elements. */
+export function offersPage(elements: unknown[], total = elements.length) {
+  return { elements, paging: { count: 100, start: 0, total } };
+}
+
+export const offersNsA = offersPage([
+  offer("offer-a", "Alpha Game", "BASE_GAME"),
+  offer("offer-a-audience", "AlphaDevAudience", "OTHERS"),
+]);
+
+export const offersNsB = offersPage([offer("offer-b", "Gamma Game", "BASE_GAME")]);
+
+/** Two base games in one namespace: ambiguous, so it yields no entry. */
+export const offersNsC = offersPage([
+  offer("offer-c1", "Delta Standard", "BASE_GAME"),
+  offer("offer-c2", "Delta Deluxe", "BASE_GAME"),
+]);
+
+/** Answer of `bulk/offers`: a map of offerId to offer, with no entry for ids Epic does not know. */
+export const bulkOffersNsW = {
+  o1: offer("o1", "Wished One", "BASE_GAME"),
+  o2: offer("o2", "Wished Two", "BASE_GAME"),
+  o3: offer("o3", "Wished Add-on", "OTHERS"),
 };
 
-export const catalogNsB = {
-  "item-3": { id: "item-3", title: "Gamma Game", namespace: "ns-b" },
-  "item-4": { id: "item-4", namespace: "ns-b" },
-};
-
+/** Shape of the real answer: elements carry only an offer id and namespace, no offer object or title. */
 export const wishlistOk = {
   data: {
     Wishlist: {
       wishlistItems: {
         elements: [
-          { id: "w1", offerId: "o1", namespace: "ns-w", offer: { id: "o1", title: "Wished One" } },
-          { id: "w2", offerId: "o2", namespace: "ns-w", offer: { id: "o2", title: "Wished Two" } },
+          { id: "w1", offerId: "o1", namespace: "ns-w", created: "2026-10-26T17:02:19.841Z", order: null },
+          { id: "w2", offerId: "o2", namespace: "ns-w" },
+          { id: "w3", offerId: "o3", namespace: "ns-w" },
+          { id: "w4", offerId: "o-gone", namespace: "ns-w" },
+          { id: "w5", namespace: "ns-w" },
         ],
       },
     },
