@@ -1,6 +1,6 @@
 import type { LibraryEntry } from "../../contract";
 import { SyncError } from "../../errors";
-import { NotLoggedInError, type PlatformAdapter } from "../adapter";
+import { NotLoggedInError, type PlatformAdapter, type ReportProgress } from "../adapter";
 import { parseIsLoggedIn, parseOwnedPage, parseProducts, parseWishlistIds } from "./parse";
 
 const USERDATA_URL = "https://embed.gog.com/userData.json";
@@ -18,7 +18,7 @@ async function fetchJson(url: string, init?: RequestInit): Promise<unknown> {
 
 const withSession: RequestInit = { credentials: "include", headers: { Accept: "application/json" } };
 
-async function fetchOwnedEntries(): Promise<LibraryEntry[]> {
+async function fetchOwnedEntries(report: ReportProgress): Promise<LibraryEntry[]> {
   const entries: LibraryEntry[] = [];
   for (let page = 1; page <= MAX_OWNED_PAGES; page += 1) {
     const url = new URL(OWNED_URL);
@@ -26,12 +26,15 @@ async function fetchOwnedEntries(): Promise<LibraryEntry[]> {
     url.searchParams.set("page", String(page));
     const parsed = parseOwnedPage(await fetchJson(url.toString(), withSession));
     entries.push(...parsed.products.map(({ id, title }) => ({ storeId: id, title, wishlisted: false })));
+    // GOG tells how many pages there are, not how many games, so only the games read so far are reported.
+    report({ stage: "collection", done: entries.length });
     if (page >= parsed.totalPages) break;
   }
   return entries;
 }
 
-async function fetchWishlistEntries(): Promise<LibraryEntry[]> {
+async function fetchWishlistEntries(report: ReportProgress): Promise<LibraryEntry[]> {
+  report({ stage: "wishlist" });
   const ids = parseWishlistIds(await fetchJson(WISHLIST_URL, withSession));
   const entries: LibraryEntry[] = [];
   for (let i = 0; i < ids.length; i += PRODUCTS_BATCH_SIZE) {
@@ -39,13 +42,15 @@ async function fetchWishlistEntries(): Promise<LibraryEntry[]> {
     url.searchParams.set("ids", ids.slice(i, i + PRODUCTS_BATCH_SIZE).join(","));
     const products = parseProducts(await fetchJson(url.toString())); // NOSONAR
     entries.push(...products.map(({ id, title }) => ({ storeId: id, title, wishlisted: true })));
+    report({ stage: "wishlist", done: entries.length, total: ids.length });
   }
   return entries;
 }
 
 export const gogAdapter: PlatformAdapter = {
-  async fetchEntries() {
+  async fetchEntries(report = () => {}) {
+    report({ stage: "starting" });
     if (!parseIsLoggedIn(await fetchJson(USERDATA_URL, withSession))) throw new NotLoggedInError("gog");
-    return [...(await fetchOwnedEntries()), ...(await fetchWishlistEntries())];
+    return [...(await fetchOwnedEntries(report)), ...(await fetchWishlistEntries(report))];
   },
 };

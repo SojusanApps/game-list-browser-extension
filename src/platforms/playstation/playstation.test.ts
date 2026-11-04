@@ -17,6 +17,7 @@ import {
   extractNextData,
   parseCollectionPage,
   parseConceptId,
+  parseGraphqlProduct,
   parseWishlist,
 } from "./parse";
 
@@ -24,13 +25,24 @@ const owned = (title: string) => ({ storeId: `P-${title}`, title, wishlisted: fa
 const wished = (storeId: string, title: string) => ({ storeId, title, wishlisted: true });
 const conceptOwned = (title: string) => ({ storeId: `C-P-${title}`, title, wishlisted: false });
 const conceptWished = (productId: string, title: string) => ({ storeId: `C-${productId}`, title, wishlisted: true });
-/** Answers store product pages with concept `C-<product id>` (null: unknown product); library pages go to `library`. */
+/** Answers GraphQL and store product pages with concept `C-<product id>` (null: unknown product); library pages go to `library`. */
 function withStore(
   library: (url: string, init: RequestInit) => Response,
   conceptOf: (productId: string) => string | null = productId => `C-${productId}`,
   storeUrls: string[] = [],
+  graphql: (url: string, init: RequestInit) => Response | Promise<Response> = (url, _init) => {
+    const productId = JSON.parse(new URL(url).searchParams.get("variables")!).productId as string;
+    return graphqlAnswer(productId, conceptOf(productId));
+  },
+  /** The purchased-games GraphQL list; by default unavailable, so the library's html pages are used. */
+  purchased: (url: string, init: RequestInit) => Response | Promise<Response> = () => new Response("", { status: 404 }),
 ) {
   return async (url: string, init: RequestInit): Promise<Response> => {
+    if (url.startsWith("https://web.np.playstation.com/")) {
+      return new URL(url).searchParams.get("operationName") === "getPurchasedGameList"
+        ? purchased(url, init)
+        : graphql(url, init);
+    }
     if (!url.startsWith("https://store.playstation.com/")) return library(url, init);
     storeUrls.push(url);
     const productId = decodeURIComponent(url.split("/product/")[1]!);
@@ -38,6 +50,19 @@ function withStore(
     return html(page(conceptId ? productNextData(productId, conceptId) : productErrorNextData));
   };
 }
+/** What the store's GraphQL API answers for a product with the given concept (null: unknown product). */
+const graphqlAnswer = (productId: string, conceptId: string | null, invariantName?: string) =>
+  new Response(
+    JSON.stringify({
+      data: {
+        productRetrieve: conceptId
+          ? { id: productId, invariantName, concept: { __typename: "Concept", id: conceptId } }
+          : null,
+      },
+    }),
+    { status: 200 },
+  );
+const noSleep = async () => {};
 const html = (body: string, init: ResponseInit = {}) => new Response(body, { status: 200, ...init });
 
 describe("parse", () => {
@@ -65,6 +90,25 @@ describe("parse", () => {
     ]);
     expect(parseWishlist(emptyWishlistNextData)).toEqual([]);
     expect(parseWishlist(signedOutNextData)).toBeNull();
+  });
+});
+
+describe("graphql concept ids", () => {
+  it("reads the concept of the requested product", async () => {
+    const body = await graphqlAnswer("P-1", "10003293").json();
+    expect(parseGraphqlProduct(body, "P-1")).toEqual({ conceptId: "10003293", title: null });
+  });
+
+  it("reads the English invariant name of the product", async () => {
+    const body = await graphqlAnswer("P-1", "10003293", " Zenith: Nexus ").json();
+    expect(parseGraphqlProduct(body, "P-1")).toEqual({ conceptId: "10003293", title: "Zenith: Nexus" });
+  });
+
+  it("yields null for errors, unknown products and another product's answer", async () => {
+    expect(parseGraphqlProduct({ errors: [{}], data: null }, "P-1")).toBeNull();
+    expect(parseGraphqlProduct(await graphqlAnswer("P-1", null).json(), "P-1")).toBeNull();
+    expect(parseGraphqlProduct(await graphqlAnswer("P-2", "7").json(), "P-1")).toBeNull();
+    expect(parseGraphqlProduct("nope", "P-1")).toBeNull();
   });
 });
 
@@ -194,6 +238,143 @@ describe("playstation adapter", () => {
       throw new TypeError("Failed to fetch");
     });
     await expect(adapter.fetchEntries()).rejects.toBeInstanceOf(NotLoggedInError);
+  });
+
+  it("lists purchased games from GraphQL, fetching the pages after the first in parallel", async () => {
+    const starts: number[] = [];
+    const titles = ["A", "B", "C", "D", "E"];
+    const adapter = createPlayStationAdapter(
+      withStore(
+        url => html(page(url.includes("wishlist") ? emptyWishlistNextData : signedOutNextData)),
+        undefined,
+        [],
+        undefined,
+        (url, init) => {
+          const { start } = JSON.parse(new URL(url).searchParams.get("variables")!) as { start: number };
+          starts.push(start);
+          expect(new Headers(init.headers).get("x-psn-store-locale-override")).toBe("en-US");
+          const games = titles.slice(start, start + 2).map(name => ({ name, productId: `P-${name}` }));
+          return new Response(
+            JSON.stringify({
+              data: {
+                purchasedTitlesRetrieve: {
+                  games,
+                  pageInfo: { isLast: start + 2 >= titles.length, offset: start, size: 2, totalCount: titles.length },
+                },
+              },
+            }),
+          );
+        },
+      ),
+      noSleep,
+    );
+    expect((await adapter.fetchEntries()).map(entry => entry.title)).toEqual(titles);
+    expect([...starts].sort((a, b) => a - b)).toEqual([0, 2, 4]);
+  });
+
+  it("falls back to the library pages when the purchased-games GraphQL fails", async () => {
+    const adapter = createPlayStationAdapter(
+      withStore(singleGame, undefined, [], undefined, () => new Response('{"errors":[{"message":"nope"}]}')),
+      noSleep,
+    );
+    expect((await adapter.fetchEntries())[0]).toEqual(conceptOwned("A"));
+  });
+
+  it("reports its stages and how far it has come", async () => {
+    const updates: Array<{ stage: string; done?: number; total?: number }> = [];
+    const adapter = createPlayStationAdapter(withStore(singleGame), noSleep);
+    await adapter.fetchEntries(update => updates.push(update));
+    expect(updates.map(update => update.stage)).toContain("collection");
+    expect(updates).toContainEqual({ stage: "wishlist" });
+    expect(updates.at(-1)).toEqual({ stage: "resolving", done: 3, total: 3 });
+    expect(updates.filter(update => update.stage === "resolving")[0]).toEqual({
+      stage: "resolving",
+      done: 0,
+      total: 3,
+    });
+  });
+
+  it("asks GraphQL for each product with the persisted query and the user's locale", async () => {
+    const calls: Array<{ url: URL; headers: Headers }> = [];
+    const adapter = createPlayStationAdapter(
+      withStore(singleGame, undefined, [], (url, init) => {
+        calls.push({ url: new URL(url), headers: new Headers(init.headers) });
+        const productId = JSON.parse(new URL(url).searchParams.get("variables")!).productId as string;
+        return graphqlAnswer(productId, `C-${productId}`);
+      }),
+      noSleep,
+    );
+    await adapter.fetchEntries();
+    expect(calls).toHaveLength(3);
+    const { url, headers } = calls[0]!;
+    expect(url.searchParams.get("operationName")).toBe("productRetrieveForCtasWithPrice");
+    expect(JSON.parse(url.searchParams.get("extensions")!).persistedQuery.sha256Hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(headers.get("x-psn-store-locale-override")).toBe("pl-PL");
+    expect(headers.get("apollographql-client-name")).toBe("@sie-private/web-commerce-anywhere");
+  });
+
+  it("titles entries with the English invariant name from GraphQL, and keeps the library title on a fallback", async () => {
+    const english = createPlayStationAdapter(
+      withStore(singleGame, undefined, [], url => {
+        const productId = JSON.parse(new URL(url).searchParams.get("variables")!).productId as string;
+        return graphqlAnswer(productId, `C-${productId}`, `English ${productId}`);
+      }),
+      noSleep,
+    );
+    expect((await english.fetchEntries())[0]).toEqual({ storeId: "C-P-A", title: "English P-A", wishlisted: false });
+
+    const fallback = createPlayStationAdapter(
+      withStore(singleGame, undefined, [], () => new Response("", { status: 404 })),
+      noSleep,
+    );
+    expect((await fallback.fetchEntries())[0]).toEqual(conceptOwned("A"));
+  });
+
+  it("falls back to the store page when GraphQL gives no concept", async () => {
+    const storeUrls: string[] = [];
+    const adapter = createPlayStationAdapter(
+      withStore(
+        singleGame,
+        undefined,
+        storeUrls,
+        () => new Response('{"errors":[{"message":"PersistedQueryNotFound"}]}'),
+      ),
+      noSleep,
+    );
+    expect(await adapter.fetchEntries()).toEqual([
+      conceptOwned("A"),
+      conceptWished("P-wish-1", "Hollow Knight"),
+      conceptWished("P-wish-2", "Inline Wish"),
+    ]);
+    expect(storeUrls).toHaveLength(3);
+  });
+
+  it("retries a throttled lookup with backoff and then succeeds", async () => {
+    const delays: number[] = [];
+    let attempts = 0;
+    const adapter = createPlayStationAdapter(
+      withStore(singleGame, undefined, [], (url, _init) => {
+        const productId = JSON.parse(new URL(url).searchParams.get("variables")!).productId as string;
+        if (productId === "P-A") attempts += 1;
+        return productId === "P-A" && attempts <= 2
+          ? new Response("slow down", { status: 429 })
+          : graphqlAnswer(productId, `C-${productId}`);
+      }),
+      async ms => {
+        delays.push(ms);
+      },
+    );
+    expect((await adapter.fetchEntries())[0]).toEqual(conceptOwned("A"));
+    expect(delays).toEqual([500, 1000]);
+  });
+
+  it("fails the sync when a product keeps failing after retries", async () => {
+    const adapter = createPlayStationAdapter(
+      async url =>
+        url.startsWith("https://library.playstation.com/") ? singleGame(url) : html("down", { status: 503 }),
+      noSleep,
+    );
+    await expect(adapter.fetchEntries()).rejects.toThrow("HTTP 503");
   });
 
   it("reports HTTP failures as errors", async () => {

@@ -1,6 +1,6 @@
 import type { LibraryEntry } from "../../contract";
 import { SyncError } from "../../errors";
-import { MissingStoreIdError, NotLoggedInError, type PlatformAdapter } from "../adapter";
+import { MissingStoreIdError, NotLoggedInError, type PlatformAdapter, type ReportProgress } from "../adapter";
 import {
   isBaseGame,
   groupByNamespace,
@@ -48,15 +48,36 @@ async function readJson(response: Response): Promise<unknown> {
   }
 }
 
-/** Runs `task` over `inputs` with bounded concurrency, keeping the input order in the results. */
-async function inParallel<I, O>(inputs: readonly I[], task: (input: I) => Promise<O>): Promise<O[]> {
+/** The bulk offer lookups a wishlist takes: its ids per namespace, in batches. */
+function wishlistJobs(items: WishlistItem[]): Array<{ namespace: string; ids: string[] }> {
+  const jobs: Array<{ namespace: string; ids: string[] }> = [];
+  for (const [namespace, ids] of groupByNamespace(items)) {
+    for (let start = 0; start < ids.length; start += BULK_OFFERS_BATCH_SIZE) {
+      jobs.push({ namespace, ids: ids.slice(start, start + BULK_OFFERS_BATCH_SIZE) });
+    }
+  }
+  return jobs;
+}
+
+/**
+ * Runs `task` over `inputs` with bounded concurrency, keeping the input order in the results. `onDone` hears how many
+ * inputs are finished after each one.
+ */
+async function inParallel<I, O>(
+  inputs: readonly I[],
+  task: (input: I) => Promise<O>,
+  onDone: (done: number) => void = () => {},
+): Promise<O[]> {
   const results: O[] = Array.from({ length: inputs.length });
   let next = 0;
+  let done = 0;
   async function worker() {
     while (next < inputs.length) {
       const index = next;
       next += 1;
       results[index] = await task(inputs[index]!); // NOSONAR
+      done += 1;
+      onDone(done);
     }
   }
   await Promise.all(Array.from({ length: Math.min(OFFERS_CONCURRENCY, inputs.length) }, worker));
@@ -85,7 +106,7 @@ export function createEpicAdapter({ fetch: doFetch, warmupStoreSession }: EpicDe
     return token;
   }
 
-  async function fetchLibraryRecords(accessToken: string): Promise<LibraryRecord[]> {
+  async function fetchLibraryRecords(accessToken: string, report: ReportProgress): Promise<LibraryRecord[]> {
     const records: LibraryRecord[] = [];
     let cursor: string | null = null;
     for (let page = 0; page < MAX_LIBRARY_PAGES; page += 1) {
@@ -101,6 +122,7 @@ export function createEpicAdapter({ fetch: doFetch, warmupStoreSession }: EpicDe
       const body = await readJson(response);
       const parsed = parseLibraryPage(body);
       records.push(...parsed.records);
+      report({ stage: "collection", done: records.length });
       if (!parsed.nextCursor) return records;
       cursor = parsed.nextCursor;
     }
@@ -129,32 +151,38 @@ export function createEpicAdapter({ fetch: doFetch, warmupStoreSession }: EpicDe
   }
 
   /** Offers of every namespace, looked up in parallel since libraries span hundreds of namespaces. */
-  async function fetchOffersByNamespace(accessToken: string, namespaces: string[]): Promise<Map<string, Offer[]>> {
-    const results = await inParallel(namespaces, namespace => fetchNamespaceOffers(accessToken, namespace));
+  async function fetchOffersByNamespace(
+    accessToken: string,
+    namespaces: string[],
+    onDone: (done: number) => void,
+  ): Promise<Map<string, Offer[]>> {
+    const results = await inParallel(namespaces, namespace => fetchNamespaceOffers(accessToken, namespace), onDone);
     return new Map(namespaces.map((namespace, index) => [namespace, results[index]!]));
   }
 
   /** The wishlisted offers themselves, asked for by id so no namespace has to be listed. */
-  async function fetchWishlistOffers(accessToken: string, items: WishlistItem[]): Promise<Offer[]> {
-    const jobs: Array<{ namespace: string; ids: string[] }> = [];
-    for (const [namespace, ids] of groupByNamespace(items)) {
-      for (let start = 0; start < ids.length; start += BULK_OFFERS_BATCH_SIZE) {
-        jobs.push({ namespace, ids: ids.slice(start, start + BULK_OFFERS_BATCH_SIZE) });
-      }
-    }
-    const results = await inParallel(jobs, async ({ namespace, ids }) => {
-      const url = new URL(`${CATALOG_URL}/${encodeURIComponent(namespace)}/bulk/offers`);
-      for (const id of ids) url.searchParams.append("id", id);
-      url.searchParams.set("country", "US");
-      url.searchParams.set("locale", "en-US");
-      const response = await doFetch(url.toString(), {
-        credentials: "omit",
-        headers: { Authorization: `bearer ${accessToken}` },
-      });
-      if (!response.ok)
-        throw new SyncError("requestFailed", { platform: "epic", step: "offers", status: response.status });
-      return parseBulkOffers(await readJson(response));
-    });
+  async function fetchWishlistOffers(
+    accessToken: string,
+    jobs: ReturnType<typeof wishlistJobs>,
+    onDone: (done: number) => void,
+  ): Promise<Offer[]> {
+    const results = await inParallel(
+      jobs,
+      async ({ namespace, ids }) => {
+        const url = new URL(`${CATALOG_URL}/${encodeURIComponent(namespace)}/bulk/offers`);
+        for (const id of ids) url.searchParams.append("id", id);
+        url.searchParams.set("country", "US");
+        url.searchParams.set("locale", "en-US");
+        const response = await doFetch(url.toString(), {
+          credentials: "omit",
+          headers: { Authorization: `bearer ${accessToken}` },
+        });
+        if (!response.ok)
+          throw new SyncError("requestFailed", { platform: "epic", step: "offers", status: response.status });
+        return parseBulkOffers(await readJson(response));
+      },
+      onDone,
+    );
     return results.flat();
   }
 
@@ -190,18 +218,31 @@ export function createEpicAdapter({ fetch: doFetch, warmupStoreSession }: EpicDe
   }
 
   return {
-    async fetchEntries() {
+    async fetchEntries(report = () => {}) {
       const { accessToken, accountId } = await getToken();
-      const namespaces = libraryNamespaces(await fetchLibraryRecords(accessToken));
+      report({ stage: "collection" });
+      const namespaces = libraryNamespaces(await fetchLibraryRecords(accessToken, report));
+      report({ stage: "wishlist" });
       const wishlist = await fetchWishlist(accessToken, accountId);
-      const offersByNamespace = await fetchOffersByNamespace(accessToken, namespaces);
+
+      // Owned namespaces and wishlist batches are looked up one after the other but counted as one run of steps.
+      const jobs = wishlistJobs(wishlist.items);
+      const total = namespaces.length + jobs.length;
+      report({ stage: "resolving", done: 0, total });
+      const offersByNamespace = await fetchOffersByNamespace(accessToken, namespaces, done =>
+        report({ stage: "resolving", done, total }),
+      );
 
       const owned: LibraryEntry[] = [];
       for (const namespace of namespaces) {
         const offer = namespaceBaseGame(offersByNamespace.get(namespace) ?? []);
         if (offer) owned.push({ storeId: offer.id, title: offer.title, wishlisted: false });
       }
-      const wishlisted = (await fetchWishlistOffers(accessToken, wishlist.items))
+      const wishlisted = (
+        await fetchWishlistOffers(accessToken, jobs, done =>
+          report({ stage: "resolving", done: namespaces.length + done, total }),
+        )
+      )
         .filter(isBaseGame)
         .map((offer): LibraryEntry => ({ storeId: offer.id, title: offer.title, wishlisted: true }));
 

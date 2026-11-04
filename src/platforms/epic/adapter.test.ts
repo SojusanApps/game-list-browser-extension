@@ -70,6 +70,30 @@ describe("epic adapter", () => {
     expect(calls.some(url => url.searchParams.get("cursor") === "cursor-2")).toBe(true);
   });
 
+  it("reports each stage, counting the library and then the offer lookups as steps", async () => {
+    const { fn } = stubFetch(happyRoutes());
+    const adapter = createEpicAdapter({ fetch: fn, warmupStoreSession: async () => {} });
+    const updates: Array<{ stage: string; done?: number; total?: number }> = [];
+    await adapter.fetchEntries(update => updates.push(update));
+
+    expect(updates.map(update => update.stage)).toEqual([
+      "collection",
+      "collection",
+      "collection",
+      "wishlist",
+      "resolving",
+      "resolving",
+      "resolving",
+      "resolving",
+      "resolving",
+    ]);
+    // Library pages report the records read so far; there is no total to say how many there will be.
+    expect(updates[1]!.total).toBeUndefined();
+    expect(updates[1]!.done).toBeGreaterThan(0);
+    // 3 namespaces and 1 wishlist batch make 4 steps, the last of which finishes the run.
+    expect(updates.at(-1)).toEqual({ stage: "resolving", done: 4, total: 4 });
+  });
+
   it("reads every page of a namespace's offers", async () => {
     const routes = happyRoutes();
     routes[3] = {

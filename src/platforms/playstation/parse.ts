@@ -153,3 +153,41 @@ export function parseConceptId(nextData: unknown, productId: string): string | n
   }
   return null;
 }
+
+/** A product as the store's GraphQL API knows it: its concept and its English (invariant) name. */
+export interface GraphqlProduct {
+  conceptId: string;
+  /** The product's name in English whatever the store locale, or null when the answer has none. */
+  title: string | null;
+}
+
+/**
+ * The product from a `productRetrieveForCtasWithPrice` GraphQL answer (`data.productRetrieve`). Null when the answer
+ * has errors (for example a persisted query the server no longer knows) or no concept for the requested product.
+ */
+export function parseGraphqlProduct(body: unknown, productId: string): GraphqlProduct | null {
+  if (!isObject(body) || Array.isArray(body.errors) || !isObject(body.data)) return null;
+  const { productRetrieve } = body.data;
+  if (!isObject(productRetrieve) || productRetrieve.id !== productId || !isObject(productRetrieve.concept)) return null;
+  const conceptId = nonEmptyString(productRetrieve.concept.id);
+  return conceptId ? { conceptId, title: nonEmptyString(productRetrieve.invariantName) } : null;
+}
+
+/**
+ * One page of the `getPurchasedGameList` GraphQL answer, or null when the body has errors or no game list. Games
+ * without a title or product id are left out, as on the library page.
+ */
+export function parseGraphqlPurchasedPage(body: unknown): CollectionPage | null {
+  if (!isObject(body) || Array.isArray(body.errors) || !isObject(body.data)) return null;
+  const node = body.data.purchasedTitlesRetrieve;
+  if (!isObject(node) || !Array.isArray(node.games)) return null;
+  const entries = node.games.map(game => readEntry(game, null, "productId", false)).filter(entry => entry !== null);
+  const pageInfo = isObject(node.pageInfo) ? node.pageInfo : {};
+  return {
+    entries,
+    page: 1,
+    isLast: pageInfo.isLast === true,
+    size: finiteNumber(pageInfo.size),
+    totalCount: finiteNumber(pageInfo.totalCount),
+  };
+}

@@ -17,6 +17,7 @@ interface ErrorParams {
   nintendoCountryMissing: { step: "wishlist" | "collection" };
   nintendoCollectionRejected: { fields: string; detail: string };
   nintendoPageUnreadable: Record<never, never>;
+  syncInterrupted: Record<never, never>;
   unexpected: { detail: string };
 }
 
@@ -24,7 +25,7 @@ export type ErrorCode = keyof ErrorParams;
 
 type Catalog = { [K in ErrorCode]: (params: ErrorParams[K]) => string };
 
-const PLATFORM_NAMES: Record<Platform, string> = {
+export const PLATFORM_NAMES: Record<Platform, string> = {
   steam: "Steam",
   epic: "Epic",
   playstation: "PlayStation",
@@ -77,6 +78,7 @@ const CATALOG: Record<Language, Catalog> = {
     nintendoCollectionRejected: ({ fields, detail }) =>
       `Nintendo rejected the collection query for every id field tried (${fields}): ${detail}`,
     nintendoPageUnreadable: () => "Could not read the Nintendo collection page",
+    syncInterrupted: () => "The sync was interrupted before it finished; run it again from the Title Import page",
     unexpected: ({ detail }) => `Unexpected error: ${detail}`,
   },
   pl: {
@@ -101,6 +103,8 @@ const CATALOG: Record<Language, Catalog> = {
     nintendoCollectionRejected: ({ fields, detail }) =>
       `Nintendo odrzuciło zapytanie o kolekcję dla każdego wypróbowanego pola identyfikatora (${fields}): ${detail}`,
     nintendoPageUnreadable: () => "Nie udało się odczytać strony kolekcji Nintendo",
+    syncInterrupted: () =>
+      "Synchronizacja została przerwana przed zakończeniem; uruchom ją ponownie na stronie importu tytułów",
     unexpected: ({ detail }) => `Nieoczekiwany błąd: ${detail}`,
   },
 };

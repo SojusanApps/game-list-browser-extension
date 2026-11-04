@@ -1,6 +1,6 @@
 import type { LibraryEntry, Platform, SyncResult } from "./contract";
 import { describeError, formatError } from "./errors";
-import { type AdapterRegistry, NotLoggedInError } from "./platforms/adapter";
+import { type AdapterRegistry, NotLoggedInError, type ReportProgress } from "./platforms/adapter";
 import type { Language } from "./popup/messages";
 
 /**
@@ -20,11 +20,15 @@ export function dedupeEntries(entries: readonly LibraryEntry[]): LibraryEntry[] 
   return [...byStoreId.values()];
 }
 
-/** Runs one Platform Sync and always resolves with a SyncResult, never throws. Error messages use `language`. */
+/**
+ * Runs one Platform Sync and always resolves with a SyncResult, never throws. Error messages use `language`, and
+ * `report` hears about the adapter's progress.
+ */
 export async function runSync(
   platform: Platform,
   adapters: AdapterRegistry,
   language: Language = "en",
+  report?: ReportProgress,
 ): Promise<SyncResult> {
   const adapter = adapters[platform];
   if (!adapter) {
@@ -37,7 +41,7 @@ export async function runSync(
     };
   }
   try {
-    const entries = dedupeEntries(await adapter.fetchEntries());
+    const entries = dedupeEntries(await adapter.fetchEntries(report));
     return { platform, status: "ok", entries, count: entries.length };
   } catch (error) {
     if (error instanceof NotLoggedInError) {

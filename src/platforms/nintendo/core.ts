@@ -1,6 +1,6 @@
 import type { LibraryEntry } from "../../contract";
 import { SyncError } from "../../errors";
-import { MissingStoreIdError, NotLoggedInError, type PlatformAdapter } from "../adapter";
+import { MissingStoreIdError, NotLoggedInError, type PlatformAdapter, type ReportProgress } from "../adapter";
 import {
   CLIENT_ID_STORAGE_KEY,
   COLLECTION_OPERATION,
@@ -174,6 +174,7 @@ async function paginate(
   step: "wishlist" | "collection",
   pageSize: number,
   fetchPage: (offset: number) => Promise<TitlePage>,
+  onPage: (seen: number, total: number | null) => void = () => {},
 ): Promise<{ games: NintendoGame[]; raw: number }> {
   const games: NintendoGame[] = [];
   let seen = 0;
@@ -181,21 +182,27 @@ async function paginate(
     const result = await fetchPage(seen);
     games.push(...result.games);
     seen += result.entries;
+    onPage(seen, result.total);
     if (result.entries === 0) return { games, raw: seen };
     if (result.total !== null ? seen >= result.total : result.entries < pageSize) return { games, raw: seen };
   }
   throw new SyncError("tooManyPages", { platform: "nintendo", step });
 }
 
-async function fetchWishlistGames(deps: NintendoDeps): Promise<NintendoGame[]> {
+async function fetchWishlistGames(deps: NintendoDeps, report: ReportProgress): Promise<NintendoGame[]> {
+  report({ stage: "wishlist" });
   const session = await getFreshSession(deps);
   const idToken = trimmed(session.idToken);
   const country = sessionCountry(session);
   if (!country) throw new SyncError("nintendoCountryMissing", { step: "wishlist" });
 
   const attempt = (config: WishlistConfig) =>
-    paginate("wishlist", WISHLIST_PAGE_SIZE, offset =>
-      fetchWishlistPage(deps, buildWishlistRequestUrl(country, idToken, offset, config.queryHash), config.clientId),
+    paginate(
+      "wishlist",
+      WISHLIST_PAGE_SIZE,
+      offset =>
+        fetchWishlistPage(deps, buildWishlistRequestUrl(country, idToken, offset, config.queryHash), config.clientId),
+      (seen, total) => report({ stage: "wishlist", done: seen, total: total ?? undefined }),
     );
 
   const { config, fromStorage } = await getWishlistConfig(deps);
@@ -287,16 +294,24 @@ async function fetchCollectionPage(
   return parseCollectionPage(payload);
 }
 
-async function fetchCollectionGames(deps: NintendoDeps): Promise<NintendoGame[]> {
+async function fetchCollectionGames(deps: NintendoDeps, report: ReportProgress): Promise<NintendoGame[]> {
+  report({ stage: "collection" });
   const bootstrap = await getCollectionBootstrap(deps);
   let rejected = "";
   for (const idField of COLLECTION_ID_FIELDS) {
     try {
-      const visible = await paginate("collection", COLLECTION_PAGE_SIZE, offset =>
-        fetchCollectionPage(deps, bootstrap, offset, false, idField),
+      const visible = await paginate(
+        "collection",
+        COLLECTION_PAGE_SIZE,
+        offset => fetchCollectionPage(deps, bootstrap, offset, false, idField),
+        (seen, total) => report({ stage: "collection", done: seen, total: total ?? undefined }),
       );
-      const hidden = await paginate("collection", COLLECTION_PAGE_SIZE, offset =>
-        fetchCollectionPage(deps, bootstrap, offset, true, idField),
+      // Hidden games come after the visible ones, so their count continues from there and has no combined total.
+      const hidden = await paginate(
+        "collection",
+        COLLECTION_PAGE_SIZE,
+        offset => fetchCollectionPage(deps, bootstrap, offset, true, idField),
+        seen => report({ stage: "collection", done: visible.raw + seen }),
       );
       // A collection with views but not a single usable id means the field is not what we assume it is.
       if (visible.raw + hidden.raw > 0 && visible.games.length + hidden.games.length === 0) {
@@ -316,9 +331,9 @@ const toEntries = (games: NintendoGame[], wishlisted: boolean): LibraryEntry[] =
 
 export function createNintendoAdapter(deps: NintendoDeps): PlatformAdapter {
   return {
-    async fetchEntries() {
-      const collection = await fetchCollectionGames(deps);
-      const wishlist = await fetchWishlistGames(deps);
+    async fetchEntries(report = () => {}) {
+      const collection = await fetchCollectionGames(deps, report);
+      const wishlist = await fetchWishlistGames(deps, report);
       return [...toEntries(collection, false), ...toEntries(wishlist, true)];
     },
   };

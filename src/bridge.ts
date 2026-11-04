@@ -2,14 +2,17 @@ import {
   CONTRACT_VERSION,
   type ExtensionMessage,
   parseFrontendMessage,
+  PROGRESS_CONTRACT_VERSION,
   type Platform,
+  type SyncProgress,
   type SyncResult,
 } from "./contract";
 
 export interface BridgeDeps {
   /** Window the frontend page posts to; replies are posted back to it. */
   window: Pick<Window, "postMessage" | "addEventListener"> & { location: { origin: string } };
-  requestSync(platform: Platform): Promise<SyncResult>;
+  /** Runs the sync in the background script, passing its progress to `onProgress` before resolving with the result. */
+  requestSync(platform: Platform, onProgress: (progress: SyncProgress) => void): Promise<SyncResult>;
 }
 
 /** Wires the frontend page to the extension and announces the extension is present. */
@@ -28,7 +31,18 @@ export function startBridge({ window, requestSync }: BridgeDeps): void {
       return;
     }
 
-    const result = await requestSync(message.platform);
+    // Only frontends that know SYNC_PROGRESS are sent it; an older one would not expect the message.
+    const wantsProgress = message.version >= PROGRESS_CONTRACT_VERSION;
+    const result = await requestSync(message.platform, progress => {
+      if (!wantsProgress) return;
+      reply({
+        source: "gamelist-extension",
+        version: CONTRACT_VERSION,
+        type: "SYNC_PROGRESS",
+        requestId: message.requestId,
+        progress,
+      });
+    });
     reply({
       source: "gamelist-extension",
       version: CONTRACT_VERSION,

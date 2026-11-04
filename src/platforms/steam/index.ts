@@ -1,6 +1,6 @@
 import type { LibraryEntry } from "../../contract";
 import { SyncError } from "../../errors";
-import { NotLoggedInError, type PlatformAdapter } from "../adapter";
+import { NotLoggedInError, type PlatformAdapter, type ReportProgress } from "../adapter";
 import { parseStoreItems, parseUserData, type UserData } from "./parse";
 
 const USERDATA_URL = "https://store.steampowered.com/dynamicstore/userdata/";
@@ -24,7 +24,7 @@ async function fetchUserData(): Promise<UserData> {
   return parseUserData(payload);
 }
 
-async function fetchNames(appIds: number[]): Promise<[number, string][]> {
+async function fetchNames(appIds: number[], report: ReportProgress): Promise<[number, string][]> {
   const names: [number, string][] = [];
   for (let i = 0; i < appIds.length; i += BATCH_SIZE) {
     const url = new URL(STORE_ITEMS_URL);
@@ -38,17 +38,19 @@ async function fetchNames(appIds: number[]): Promise<[number, string][]> {
     );
     const payload = await fetchJson(url.toString()); //NOSONAR
     names.push(...parseStoreItems(payload));
+    report({ stage: "resolving", done: Math.min(i + BATCH_SIZE, appIds.length), total: appIds.length });
   }
   return names;
 }
 
 export const steamAdapter: PlatformAdapter = {
-  async fetchEntries() {
+  async fetchEntries(report = () => {}) {
+    report({ stage: "collection" });
     const { owned, wishlisted } = await fetchUserData();
     // A logged-out session gets empty owned and wishlist lists.
     if (owned.length + wishlisted.length === 0) throw new NotLoggedInError("steam");
     const ownedSet = new Set(owned);
-    const entries: LibraryEntry[] = (await fetchNames([...owned, ...wishlisted])).map(([appid, title]) => ({
+    const entries: LibraryEntry[] = (await fetchNames([...owned, ...wishlisted], report)).map(([appid, title]) => ({
       storeId: String(appid),
       title,
       wishlisted: !ownedSet.has(appid),
