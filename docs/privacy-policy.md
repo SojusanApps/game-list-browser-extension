@@ -14,9 +14,10 @@ The Sojusan GameList browser extension ("the extension") fills the Title Import 
 ## What the extension stores
 
 - A language preference for the extension popup (English or Polish).
+- The status of your latest sync of each store (stage, number of games read, or an error message), shown in the popup. It is kept only in memory for the current browser session and is cleared when the browser closes.
 - A cached identifier the Nintendo integration needs to query Nintendo's wishlist, so it does not have to be looked up every time.
 
-Both are kept locally in your browser through the browser's extension storage. They contain no personal data.
+All of these are kept locally in your browser through the browser's extension storage. They contain no personal data.
 
 ## What the extension does not do
 
@@ -26,12 +27,12 @@ Both are kept locally in your browser through the browser's extension storage. T
 
 ## Permissions
 
-| Permission                                                       | Why it is needed                                                                                                                 |
-| ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| Access to Steam, Epic Games, GOG, PlayStation and Nintendo sites | To request your own library and wishlist from the store you are logged in to.                                                    |
-| Access to the GameList site                                      | To receive your button click and give back the titles.                                                                           |
-| `scripting`                                                      | The Nintendo integration briefly opens its own store pages in a background tab to read the page configuration, then closes them. |
-| `storage`                                                        | To remember the popup language and the Nintendo configuration cache.                                                             |
+| Permission                                                       | Why it is needed                                                                                                                        |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Access to Steam, Epic Games, GOG, PlayStation and Nintendo sites | To request your own library and wishlist from the store you are logged in to.                                                           |
+| Access to the GameList site                                      | To receive your button click and give back the titles.                                                                                  |
+| `scripting`                                                      | The Nintendo integration briefly opens its own store pages in a background tab to read the page configuration, then closes them.        |
+| `storage`                                                        | To remember the popup language and the Nintendo configuration cache, and to show the status of a running or finished sync in the popup. |
 
 ## Contact
 

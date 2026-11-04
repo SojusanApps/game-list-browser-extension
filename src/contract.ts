@@ -1,5 +1,7 @@
 /** Message contract between the GameList frontend page and the extension. See docs/frontend-contract.md. */
-export const CONTRACT_VERSION = 2;
+export const CONTRACT_VERSION = 3;
+/** First contract version whose frontends understand `SYNC_PROGRESS`; older ones are never sent it. */
+export const PROGRESS_CONTRACT_VERSION = 3;
 
 export const PLATFORMS = ["steam", "epic", "playstation", "nintendo", "gog"] as const;
 export type Platform = (typeof PLATFORMS)[number];
@@ -23,6 +25,18 @@ export interface SyncResult {
   count: number;
   /** Human-readable detail, only set when `status` is `error`. */
   error?: string;
+}
+
+/** What a Platform Sync is busy with. Platforms report only the stages they have. */
+export const PROGRESS_STAGES = ["starting", "collection", "wishlist", "resolving"] as const;
+export type ProgressStage = (typeof PROGRESS_STAGES)[number];
+
+/** Progress of a running Platform Sync. `done` and `total` count the stage's items and are set only when known. */
+export interface SyncProgress {
+  platform: Platform;
+  stage: ProgressStage;
+  done?: number;
+  total?: number;
 }
 
 export interface FrontendPing {
@@ -55,11 +69,32 @@ export interface ExtensionSyncResult {
   result: SyncResult;
 }
 
-export type ExtensionMessage = ExtensionReady | ExtensionSyncResult;
+/** Sent zero or more times before `SYNC_RESULT`, only to frontends speaking `PROGRESS_CONTRACT_VERSION` or later. */
+export interface ExtensionSyncProgress {
+  source: "gamelist-extension";
+  version: number;
+  type: "SYNC_PROGRESS";
+  requestId: string;
+  progress: SyncProgress;
+}
 
-/** Message from the content script to the background script. */
+export type ExtensionMessage = ExtensionReady | ExtensionSyncResult | ExtensionSyncProgress;
+
+/** Name of the port a content script opens to run one Platform Sync in the background script. */
+export const SYNC_PORT = "gamelist-sync";
+
+/** First message on a sync port, from the content script to the background script. */
 export interface BackgroundSyncRequest {
   type: "SYNC";
+  platform: Platform;
+}
+
+/** Messages back on a sync port: any number of `PROGRESS`, then one `RESULT`. */
+export type BackgroundSyncReply = { type: "PROGRESS"; progress: SyncProgress } | { type: "RESULT"; result: SyncResult };
+
+/** Message from the popup asking the background script to forget a finished Platform Sync's status. */
+export interface BackgroundDismissRequest {
+  type: "DISMISS";
   platform: Platform;
 }
 
